@@ -34,15 +34,6 @@ internal sealed class KeyInterceptor : IDisposable
     /// <summary>Live feedback during recording — partial combo like "Ctrl+Shift".</summary>
     public static event Action<string>? HotkeyRecording;
 
-    /// <summary>System hotkeys that should NOT be intercepted.</summary>
-    private static readonly HashSet<string> SystemHotkeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Z", "Ctrl+Y",
-        "Ctrl+A", "Ctrl+S", "Ctrl+W", "Ctrl+Q",
-        "Alt+Tab", "Alt+F4", "Ctrl+Esc", "Ctrl+Shift+Escape",
-        "Ctrl+Alt+Delete",
-    };
-
     /// <summary>Fired on key down (WM_KEYDOWN / WM_SYSKEYDOWN).</summary>
     public event Action<KeyEventData>? KeyPressed;
 
@@ -131,7 +122,7 @@ internal sealed class KeyInterceptor : IDisposable
                         // Final combo
                         parts.Add(keyName);
                         string combo = string.Join("+", parts);
-                        if (!SystemHotkeys.Contains(combo))
+                        if (!SystemHotkeys.IsSystem(combo))
                         {
                             IsRecordingHotkey = false;
                             LogToFile($"[RECORD] captured: {combo}");

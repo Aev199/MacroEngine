@@ -5,8 +5,12 @@ namespace MacroEngine.UI;
 
 /// <summary>
 /// Visual editor for triggers.json.
-/// Opens from the tray menu — allows add/edit/delete of triggers
-/// without manually editing the JSON file.
+///
+/// Trigger activation types:
+///   Текст   — typed text trigger (stored as TriggerEntry.Trigger)
+///   Шорткат — direct hotkey (stored as TriggerEntry.Hotkey)
+///   Лидер   — hotkey activates leader mode, then text completes it
+///             (stored as TriggerEntry.Leader + TriggerEntry.Trigger)
 /// </summary>
 internal sealed class SettingsForm : Form
 {
@@ -19,9 +23,20 @@ internal sealed class SettingsForm : Form
     private readonly Button _btnClose;
     private readonly Label _lblHint;
     private readonly FlowLayoutPanel _filterPanel;
-    private string _filterContext = "Все"; // current filter
 
+    private string _filterContext = "Все";
     private bool _dirty;
+    private bool _loading;
+
+    // ── Column names ────────────────────────────────────────────────
+    private const string ColType    = "Type";
+    private const string ColTrigger = "Trigger";
+    private const string ColHotkey  = "Hotkey";    // stores both hotkey (Шорткат) and leader (Лидер)
+    private const string ColValue   = "Value";
+    private const string ColContext = "Context";
+    private const string ColAction  = "Action";
+
+    private static readonly Color HotkeyActiveColor = Color.FromArgb(0, 100, 200);
 
     public SettingsForm(TriggerConfig config)
     {
@@ -29,7 +44,7 @@ internal sealed class SettingsForm : Form
         _triggers = config.Load();
 
         Text = "MacroEngine — Редактор триггеров";
-        Size = new Size(820, 520);
+        Size = new Size(860, 520);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = false;
@@ -37,7 +52,7 @@ internal sealed class SettingsForm : Form
         Icon = AppIcon.Get();
         Padding = new Padding(10);
 
-        // ── Filter tabs ────────────────────────────────────────
+        // ── Filter tabs ────────────────────────────────────────────
         _filterPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -46,17 +61,19 @@ internal sealed class SettingsForm : Form
             AutoSize = true
         };
 
-        // ── Hint label ──────────────────────────────────────────
+        // ── Hint ──────────────────────────────────────────────────
         _lblHint = new Label
         {
-            Text = "Сочетание / Лидер / text/richtext/script/lisp. Контекст: * = везде, acad = AutoCAD, !browser = не в браузере.",
+            Text = "Тип: Текст — набранный триггер | Шорткат — прямое сочетание | " +
+                   "Лидер — удерживаемый аккорд (Ctrl/Alt) + клавиши «остатка» из поля «Триггер» (напр. gm). " +
+                   "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере.",
             AutoSize = true,
             ForeColor = Color.Gray,
             Dock = DockStyle.Top,
             Padding = new Padding(0, 0, 0, 4)
         };
 
-        // ── Data grid ───────────────────────────────────────────
+        // ── Grid ──────────────────────────────────────────────────
         _grid = new DataGridView
         {
             Dock = DockStyle.Fill,
@@ -71,58 +88,69 @@ internal sealed class SettingsForm : Form
             BackgroundColor = SystemColors.Window
         };
 
-        // Columns
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Trigger",
-            HeaderText = "Триггер",
-            FillWeight = 12,
-            MinimumWidth = 55
-        });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Hotkey",
-            HeaderText = "Сочетание",
-            FillWeight = 12,
-            MinimumWidth = 70
-        });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Leader",
-            HeaderText = "Лидер",
-            FillWeight = 10,
-            MinimumWidth = 65
-        });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Value",
-            HeaderText = "Значение",
-            FillWeight = 35,
-            MinimumWidth = 100
-        });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
-        {
-            Name = "Context",
-            HeaderText = "Контекст",
-            FillWeight = 20,
-            MinimumWidth = 80
-        });
         _grid.Columns.Add(new DataGridViewComboBoxColumn
         {
-            Name = "Action",
-            HeaderText = "Действие",
+            Name = ColType,
+            HeaderText = "Тип",
+            FillWeight = 11,
+            MinimumWidth = 80,
+            DataSource = new[] { "Текст", "Шорткат", "Лидер" },
+            FlatStyle = FlatStyle.Flat
+        });
+
+        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = ColTrigger,
+            HeaderText = "Триггер",
             FillWeight = 12,
+            MinimumWidth = 65
+        });
+
+        // Always ReadOnly — opened via mouse click for Шорткат/Лидер rows.
+        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = ColHotkey,
+            HeaderText = "Шорткат / Лидер",
+            FillWeight = 18,
+            MinimumWidth = 120,
+            ReadOnly = true
+        });
+
+        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = ColValue,
+            HeaderText = "Значение",
+            FillWeight = 33,
+            MinimumWidth = 100
+        });
+
+        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        {
+            Name = ColContext,
+            HeaderText = "Контекст",
+            FillWeight = 14,
+            MinimumWidth = 70
+        });
+
+        _grid.Columns.Add(new DataGridViewComboBoxColumn
+        {
+            Name = ColAction,
+            HeaderText = "Действие",
+            FillWeight = 11,
             MinimumWidth = 70,
             DataSource = new[] { "text", "richtext", "script", "lisp" },
             FlatStyle = FlatStyle.Flat
         });
 
-        _grid.CellValueChanged += OnCellValueChanged;
+        _grid.CellValueChanged            += OnCellValueChanged;
         _grid.CurrentCellDirtyStateChanged += OnCurrentCellDirty;
-        _grid.CellMouseClick += OnCellMouseClick;
-        _grid.DataError += (_, e) => { /* suppress combo box errors */ };
+        _grid.CellMouseClick              += OnCellMouseClick;
+        _grid.CellMouseEnter              += OnCellMouseEnter;
+        _grid.CellMouseLeave              += (_, _) => _grid.Cursor = Cursors.Default;
+        _grid.CellFormatting              += OnCellFormatting;
+        _grid.DataError                   += (_, e) => { /* suppress combo box type errors */ };
 
-        // ── Buttons panel ───────────────────────────────────────
+        // ── Buttons ───────────────────────────────────────────────
         var buttonPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Bottom,
@@ -131,22 +159,20 @@ internal sealed class SettingsForm : Form
             AutoSize = true
         };
 
-        _btnAdd = new Button { Text = "➕ Добавить", Width = 110 };
-        _btnAdd.Click += OnAdd;
+        _btnAdd    = new Button { Text = "➕ Добавить",  Width = 110 };
+        _btnDelete = new Button { Text = "🗑 Удалить",   Width = 110 };
+        _btnSave   = new Button { Text = "💾 Сохранить", Width = 110, Enabled = false };
+        _btnClose  = new Button { Text = "Закрыть",      Width = 90 };
 
-        _btnDelete = new Button { Text = "🗑 Удалить", Width = 110 };
+        _btnAdd.Click    += OnAdd;
         _btnDelete.Click += OnDelete;
-
-        _btnSave = new Button { Text = "💾 Сохранить", Width = 110, Enabled = false };
-        _btnSave.Click += OnSave;
-
-        _btnClose = new Button { Text = "Закрыть", Width = 90 };
-        _btnClose.Click += (_, _) => Close();
+        _btnSave.Click   += OnSave;
+        _btnClose.Click  += (_, _) => Close();
 
         buttonPanel.Controls.AddRange(new Control[] { _btnAdd, _btnDelete, _btnSave, _btnClose });
 
-        // ── Layout ──────────────────────────────────────────────
-        var mainPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0) };
+        // ── Layout ────────────────────────────────────────────────
+        var mainPanel = new Panel { Dock = DockStyle.Fill };
         mainPanel.Controls.Add(_grid);
         mainPanel.Controls.Add(_lblHint);
         mainPanel.Controls.Add(_filterPanel);
@@ -154,7 +180,6 @@ internal sealed class SettingsForm : Form
         Controls.Add(mainPanel);
         Controls.Add(buttonPanel);
 
-        // ── Populate grid + filters ─────────────────────────────
         PopulateGrid();
         PopulateFilters();
     }
@@ -165,14 +190,73 @@ internal sealed class SettingsForm : Form
 
     private void PopulateGrid()
     {
-        _grid.Rows.Clear();
-        foreach (var t in _triggers)
+        _loading = true;
+        try
         {
-            _grid.Rows.Add(t.Trigger, t.Hotkey ?? "", t.Leader ?? "", t.Value, t.Context, t.Action);
+            _grid.Rows.Clear();
+            foreach (var t in _triggers)
+            {
+                string type   = DeriveType(t);
+                string hotkey = t.Hotkey ?? t.Leader ?? "";
+
+                int idx = _grid.Rows.Add(type, t.Trigger, hotkey, t.Value, t.Context, t.Action);
+                ApplyRowTypeStyles(_grid.Rows[idx]);
+            }
+            _dirty = false;
+            _btnSave.Enabled = false;
         }
-        _dirty = false;
-        _btnSave.Enabled = false;
+        finally
+        {
+            _loading = false;
+        }
         ApplyFilter();
+    }
+
+    private static string DeriveType(TriggerEntry t)
+    {
+        if (!string.IsNullOrWhiteSpace(t.Hotkey)) return "Шорткат";
+        if (!string.IsNullOrWhiteSpace(t.Leader)) return "Лидер";
+        return "Текст";
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Row type styling
+    // ═══════════════════════════════════════════════════════════════
+
+    private void ApplyRowTypeStyles(DataGridViewRow row)
+    {
+        string type = row.Cells[ColType].Value?.ToString() ?? "Текст";
+
+        bool triggerEditable = type != "Шорткат";
+        bool hotkeyEditable  = type != "Текст";
+
+        var triggerCell = row.Cells[ColTrigger];
+        var hotkeyCell  = row.Cells[ColHotkey];
+
+        triggerCell.ReadOnly = !triggerEditable;
+        triggerCell.Style.BackColor = triggerEditable ? SystemColors.Window : SystemColors.ControlLight;
+        triggerCell.Style.ForeColor = triggerEditable ? SystemColors.ControlText : SystemColors.GrayText;
+
+        hotkeyCell.Style.BackColor = hotkeyEditable ? SystemColors.Window : SystemColors.ControlLight;
+        hotkeyCell.Style.ForeColor = hotkeyEditable ? HotkeyActiveColor : SystemColors.GrayText;
+        hotkeyCell.ToolTipText     = hotkeyEditable ? "Нажмите для записи сочетания клавиш" : "";
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Cell formatting (display-only transformations)
+    // ═══════════════════════════════════════════════════════════════
+
+    private void OnCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0) return;
+        if (_grid.Columns[e.ColumnIndex].Name != ColHotkey) return;
+
+        string type = _grid.Rows[e.RowIndex].Cells[ColType].Value?.ToString() ?? "Текст";
+        if (type == "Текст") return;
+
+        string val = e.Value?.ToString() ?? "";
+        e.Value = val.Length > 0 ? "⌨  " + val : "⌨  нажмите для записи";
+        e.FormattingApplied = true;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -183,27 +267,19 @@ internal sealed class SettingsForm : Form
     {
         _filterPanel.Controls.Clear();
 
-        // Collect unique context patterns
-        var contexts = new Dictionary<string, int>();
+        var counts = new Dictionary<string, int>();
         foreach (var t in _triggers)
         {
-            // Split comma-separated contexts
-            foreach (var ctx in t.Context.Split(',', StringSplitOptions.TrimEntries))
+            foreach (var part in t.Context.Split(',', StringSplitOptions.TrimEntries))
             {
-                string key = ctx.StartsWith('!') ? ctx : ctx == "*" ? "Глобальные" : ctx;
-                contexts.TryGetValue(key, out int c);
-                contexts[key] = c + 1;
+                string key = part == "*" ? "Глобальные" : part;
+                counts[key] = counts.GetValueOrDefault(key) + 1;
             }
         }
 
-        // Build filter buttons
         AddFilterButton("Все", _triggers.Count);
-        if (contexts.TryGetValue("Глобальные", out int globalCount))
-        {
-            AddFilterButton("Глобальные", globalCount);
-            contexts.Remove("Глобальные");
-        }
-        foreach (var kv in contexts.OrderByDescending(kv => kv.Value))
+        if (counts.TryGetValue("Глобальные", out int g)) { AddFilterButton("Глобальные", g); counts.Remove("Глобальные"); }
+        foreach (var kv in counts.OrderByDescending(kv => kv.Value))
             AddFilterButton(kv.Key, kv.Value);
     }
 
@@ -223,10 +299,9 @@ internal sealed class SettingsForm : Form
         {
             _filterContext = label;
             ApplyFilter();
-            // Refresh button colors
             foreach (Button b in _filterPanel.Controls)
             {
-                bool active = b.Text.StartsWith(label);
+                bool active = b.Text.StartsWith(label + " (");
                 b.BackColor = active ? SystemColors.Highlight : SystemColors.Control;
                 b.ForeColor = active ? Color.White : SystemColors.ControlText;
             }
@@ -236,24 +311,21 @@ internal sealed class SettingsForm : Form
 
     private void ApplyFilter()
     {
-        string filter = _filterContext;
-
-        for (int i = _grid.RowCount - 1; i >= 0; i--)
+        for (int i = 0; i < _grid.RowCount; i++)
         {
             var row = _grid.Rows[i];
-            string ctx = row.Cells["Context"].Value?.ToString() ?? "*";
+            string ctx = row.Cells[ColContext].Value?.ToString() ?? "*";
 
-            bool visible = filter == "Все"
-                || filter == "Глобальные" && (ctx == "*" || ctx == "*, !browser")
-                || ctx.Split(',', StringSplitOptions.TrimEntries).Any(c => c.Trim() == filter);
+            bool visible = _filterContext == "Все"
+                || (_filterContext == "Глобальные" && (ctx == "*" || ctx.StartsWith("*,")))
+                || ctx.Split(',', StringSplitOptions.TrimEntries).Any(c => c.Trim() == _filterContext);
 
-            // Color-code rows by context type
-            if (visible && filter == "Все")
+            if (visible && _filterContext == "Все")
             {
                 row.DefaultCellStyle.BackColor = ctx == "*" || ctx.StartsWith("*,")
-                    ? Color.FromArgb(230, 255, 230)  // green tint = global
-                    : ctx.Contains("winword") ? Color.FromArgb(220, 230, 255)  // blue = Word
-                    : ctx.Contains("acad") ? Color.FromArgb(255, 240, 220)     // orange = CAD
+                    ? Color.FromArgb(230, 255, 230)
+                    : ctx.Contains("winword") ? Color.FromArgb(220, 230, 255)
+                    : ctx.Contains("acad")    ? Color.FromArgb(255, 240, 220)
                     : SystemColors.Window;
             }
             else
@@ -271,14 +343,17 @@ internal sealed class SettingsForm : Form
 
     private void OnCurrentCellDirty(object? sender, EventArgs e)
     {
-        // Commit combo box changes immediately
         if (_grid.IsCurrentCellDirty)
             _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
     }
 
     private void OnCellValueChanged(object? sender, DataGridViewCellEventArgs e)
     {
-        if (e.RowIndex < 0) return;
+        if (_loading || e.RowIndex < 0) return;
+
+        if (_grid.Columns[e.ColumnIndex].Name == ColType)
+            ApplyRowTypeStyles(_grid.Rows[e.RowIndex]);
+
         MarkDirty();
     }
 
@@ -289,16 +364,50 @@ internal sealed class SettingsForm : Form
     }
 
     // ═══════════════════════════════════════════════════════════════
+    //  Mouse handling
+    // ═══════════════════════════════════════════════════════════════
+
+    private void OnCellMouseClick(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.Button != MouseButtons.Left) return;
+        if (_grid.Columns[e.ColumnIndex].Name != ColHotkey) return;
+
+        var row  = _grid.Rows[e.RowIndex];
+        string type = row.Cells[ColType].Value?.ToString() ?? "Текст";
+        if (type == "Текст") return;
+
+        using var recorder = new HotkeyRecorderForm(leaderMode: type == "Лидер");
+        if (recorder.ShowDialog(this) == DialogResult.OK && recorder.CapturedCombo.Length > 0)
+        {
+            row.Cells[ColHotkey].Value = recorder.CapturedCombo;
+            MarkDirty();
+        }
+    }
+
+    private void OnCellMouseEnter(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || _grid.Columns[e.ColumnIndex].Name != ColHotkey) return;
+        string type = _grid.Rows[e.RowIndex].Cells[ColType].Value?.ToString() ?? "Текст";
+        _grid.Cursor = type != "Текст" ? Cursors.Hand : Cursors.Default;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     //  Add / Delete
     // ═══════════════════════════════════════════════════════════════
 
     private void OnAdd(object? sender, EventArgs e)
     {
-        _grid.Rows.Add("!new", "", "", "replace text", "*", "text");
+        _loading = true;
+        try
+        {
+            int idx = _grid.Rows.Add("Текст", "!new", "", "текст подстановки", "*", "text");
+            ApplyRowTypeStyles(_grid.Rows[idx]);
+        }
+        finally { _loading = false; }
+
         MarkDirty();
-        // Scroll to new row
         _grid.FirstDisplayedScrollingRowIndex = _grid.RowCount - 1;
-        _grid.CurrentCell = _grid.Rows[^1].Cells[0];
+        _grid.CurrentCell = _grid.Rows[^1].Cells[ColTrigger];
         _grid.BeginEdit(true);
     }
 
@@ -308,9 +417,7 @@ internal sealed class SettingsForm : Form
         int idx = _grid.SelectedRows[0].Index;
         if (idx < 0 || idx >= _grid.RowCount) return;
 
-        var row = _grid.Rows[idx];
-        string trigger = row.Cells["Trigger"].Value?.ToString() ?? "?";
-
+        string trigger = _grid.Rows[idx].Cells[ColTrigger].Value?.ToString() ?? "?";
         var result = MessageBox.Show(
             $"Удалить триггер «{trigger}»?",
             "MacroEngine — Подтверждение",
@@ -330,41 +437,61 @@ internal sealed class SettingsForm : Form
 
     private void OnSave(object? sender, EventArgs e)
     {
-        // Validate
+        var list = new List<TriggerEntry>();
+
         for (int i = 0; i < _grid.RowCount; i++)
         {
-            var row = _grid.Rows[i];
-            string trigger = row.Cells["Trigger"].Value?.ToString()?.Trim() ?? "";
-            string value = row.Cells["Value"].Value?.ToString() ?? "";
+            var row    = _grid.Rows[i];
+            string type    = row.Cells[ColType].Value?.ToString()?.Trim()    ?? "Текст";
+            string trigger = row.Cells[ColTrigger].Value?.ToString()?.Trim() ?? "";
+            string hotkey  = row.Cells[ColHotkey].Value?.ToString()?.Trim()  ?? "";
+            string value   = row.Cells[ColValue].Value?.ToString()            ?? "";
+            string context = row.Cells[ColContext].Value?.ToString()?.Trim()  ?? "*";
+            string action  = row.Cells[ColAction].Value?.ToString()?.Trim()   ?? "text";
 
-            if (string.IsNullOrEmpty(trigger))
+            if (type == "Текст" && string.IsNullOrEmpty(trigger))
             {
-                MessageBox.Show(
-                    $"Строка {i + 1}: поле «Триггер» не может быть пустым.",
-                    "MacroEngine — Ошибка",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                MessageBox.Show($"Строка {i + 1}: поле «Триггер» не может быть пустым.",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-        }
+            if (type is "Шорткат" or "Лидер" && string.IsNullOrEmpty(hotkey))
+            {
+                MessageBox.Show($"Строка {i + 1}: сочетание клавиш не записано. Нажмите на ячейку «Шорткат / Лидер».",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (type == "Лидер" && string.IsNullOrEmpty(trigger))
+            {
+                MessageBox.Show($"Строка {i + 1}: для лидера в поле «Триггер» укажите «остаток» — клавиши, которые набираются при зажатом аккорде (напр. gm).",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            // System hotkeys have the highest priority and cannot be assigned.
+            if (type == "Шорткат" && SystemHotkeys.IsSystem(hotkey))
+            {
+                MessageBox.Show($"Строка {i + 1}: «{hotkey}» — системное сочетание, его нельзя назначить. Выберите другое.",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (type == "Лидер" && SystemHotkeys.IsSystem($"{hotkey}+{trigger}"))
+            {
+                MessageBox.Show($"Строка {i + 1}: аккорд «{hotkey}» + «{trigger}» образует системное сочетание, его нельзя назначить.",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
-        // Build trigger list from grid
-        var list = new List<TriggerEntry>();
-        for (int i = 0; i < _grid.RowCount; i++)
-        {
-            var row = _grid.Rows[i];
             list.Add(new TriggerEntry
             {
-                Trigger = row.Cells["Trigger"].Value?.ToString()?.Trim() ?? "",
-                Hotkey = row.Cells["Hotkey"].Value?.ToString()?.Trim() ?? null,
-                Leader = row.Cells["Leader"].Value?.ToString()?.Trim() ?? null,
-                Value = row.Cells["Value"].Value?.ToString() ?? "",
-                Context = row.Cells["Context"].Value?.ToString()?.Trim() ?? "*",
-                Action = row.Cells["Action"].Value?.ToString()?.Trim() ?? "text"
+                Trigger = type == "Шорткат" ? "" : trigger,
+                Hotkey  = type == "Шорткат" ? hotkey : null,
+                Leader  = type == "Лидер"   ? hotkey : null,
+                Value   = value,
+                Context = context,
+                Action  = action
             });
         }
 
-        // Save to file (TrigerConfig.Save fires ConfigChanged → InputBuffer reloads)
         _config.Save(list);
         _triggers.Clear();
         _triggers.AddRange(list);
@@ -372,63 +499,15 @@ internal sealed class SettingsForm : Form
         _dirty = false;
         _btnSave.Enabled = false;
 
-        MessageBox.Show(
-            $"Сохранено триггеров: {list.Count}",
-            "MacroEngine",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
+        MessageBox.Show($"Сохранено триггеров: {list.Count}",
+            "MacroEngine", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+        PopulateFilters();
     }
 
     // ═══════════════════════════════════════════════════════════════
     //  Close guard
     // ═══════════════════════════════════════════════════════════════
-
-    // ═══════════════════════════════════════════════════════════════
-    //  Hotkey recording
-    // ═══════════════════════════════════════════════════════════════
-
-    private void OnCellMouseClick(object? sender, DataGridViewCellMouseEventArgs e)
-    {
-        if (e.RowIndex < 0) return;
-        string colName = _grid.Columns[e.ColumnIndex].Name;
-        if (colName != "Hotkey" && colName != "Leader") return;
-        if (e.Button != MouseButtons.Left) return;
-
-        using var recorder = new HotkeyRecorderForm();
-        if (recorder.ShowDialog(this) == DialogResult.OK && recorder.CapturedCombo.Length > 0)
-        {
-            _grid.Rows[e.RowIndex].Cells[e.ColumnIndex].Value = recorder.CapturedCombo;
-            MarkDirty();
-        }
-    }
-
-    private void OnHotkeyRecording(string partial)
-    {
-        if (InvokeRequired) { BeginInvoke(() => OnHotkeyRecording(partial)); return; }
-        var cell = _grid.CurrentCell;
-        if (cell != null && _grid.Columns[cell.ColumnIndex].Name == "Hotkey")
-            cell.Value = partial;
-    }
-
-    private void OnHotkeyRecorded(string combo)
-    {
-        if (InvokeRequired) { BeginInvoke(() => OnHotkeyRecorded(combo)); return; }
-
-        var cell = _grid.CurrentCell;
-        if (cell != null && _grid.Columns[cell.ColumnIndex].Name == "Hotkey")
-        {
-            if (combo.Length > 0)
-            {
-                cell.Value = combo;
-                MarkDirty();
-            }
-            else
-            {
-                cell.Value = ""; // Cancelled — clear
-            }
-        }
-        KeyInterceptor.IsRecordingHotkey = false;
-    }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
@@ -447,15 +526,5 @@ internal sealed class SettingsForm : Form
         }
         KeyInterceptor.IsRecordingHotkey = false;
         base.OnFormClosing(e);
-    }
-
-    private static void LogDebug(string msg)
-    {
-        try
-        {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "macroengine.log");
-            File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n");
-        }
-        catch { }
     }
 }
