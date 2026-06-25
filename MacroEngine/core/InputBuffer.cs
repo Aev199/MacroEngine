@@ -49,7 +49,7 @@ internal sealed class InputBuffer
     /// list of (restSequence, TriggerEntry) pairs. The rest sequence is a
     /// lower-cased string of key names typed while the chord is held.
     /// </summary>
-    private Dictionary<string, List<(string Rest, TriggerEntry Entry)>>? _leaderMap;
+    private Dictionary<string, List<(string Seq, TriggerEntry Entry)>>? _leaderMap;
 
     /// <summary>Modifier chord (normalized) of the leader sequence currently being typed, or null.</summary>
     private string? _leaderMods;
@@ -121,7 +121,7 @@ internal sealed class InputBuffer
 
         string normMods = NormalizeHotkey(modPrefix);
 
-        List<(string Rest, TriggerEntry Entry)> candidates;
+        List<(string Seq, TriggerEntry Entry)> candidates;
         lock (_lock)
         {
             if (_leaderMap == null || !_leaderMap.TryGetValue(normMods, out var list))
@@ -131,7 +131,7 @@ internal sealed class InputBuffer
                 _leaderSeq.Clear();
                 return false;
             }
-            candidates = new List<(string Rest, TriggerEntry Entry)>(list);
+            candidates = new List<(string Seq, TriggerEntry Entry)>(list);
         }
 
         // A different chord engaged — restart the sequence.
@@ -181,7 +181,7 @@ internal sealed class InputBuffer
     /// context-matching candidate's rest sequence.
     /// </summary>
     private static bool TryMatchLeader(
-        List<(string Rest, TriggerEntry Entry)> candidates,
+        List<(string Seq, TriggerEntry Entry)> candidates,
         string attempt,
         string windowFingerprint,
         out TriggerEntry? exact,
