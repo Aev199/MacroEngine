@@ -1,0 +1,19 @@
+# .NET build artifacts
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.vs/
+
+# IDE
+.vs/
+.vscode/
+*.DotSettings.user
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log

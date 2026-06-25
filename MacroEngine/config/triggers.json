@@ -1,0 +1,50 @@
+[
+  {
+    "trigger": "@@",
+    "value": "evdokimov@marksgroup.ru",
+    "context": "*",
+    "action": "text"
+  },
+  {
+    "trigger": "!tel",
+    "value": "+7 (999) 123-45-67",
+    "context": "*",
+    "action": "text"
+  },
+  {
+    "trigger": "!date",
+    "value": "{date}",
+    "context": "*",
+    "action": "text"
+  },
+  {
+    "trigger": "!sig",
+    "value": "С уважением,\nИван Иванов\nООО «ПроектСтрой»",
+    "context": "*, !browser",
+    "action": "text"
+  },
+  {
+    "trigger": "!path",
+    "value": "\\\\server\\projects\\2026\\",
+    "context": "*",
+    "action": "text"
+  },
+  {
+    "trigger": "!db",
+    "value": "_MYBEAMPLUGIN",
+    "context": "acad",
+    "action": "text"
+  },
+  {
+    "trigger": "!vb",
+    "value": "python C:\\scripts\\midas_virtual_beams.py",
+    "context": "midas",
+    "action": "script"
+  },
+  {
+    "trigger": "!lispdef",
+    "value": "(defun c:mycommand ()\n  (setq pt (getpoint \"\\nУкажите точку: \"))\n  (command \"_.circle\" pt 100)\n  (princ)\n)",
+    "context": "acad",
+    "action": "text"
+  }
+]
