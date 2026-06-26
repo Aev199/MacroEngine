@@ -1,6 +1,5 @@
 using MacroEngine.Core;
 using MacroEngine.Modules;
-using System.Diagnostics;
 using System.Windows.Forms;
 
 namespace MacroEngine.UI;
@@ -22,7 +21,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly MacroLibrary _macros;
     private readonly string _configPath;
     private readonly string _macrosPath;
-    private readonly string _logPath;
 
     private bool _isRunning;
     private uint _lastForegroundProcessId;
@@ -35,7 +33,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // ── Config & log paths ──────────────────────────────────
         _configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "triggers.json");
         _macrosPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "macros.json");
-        _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "macroengine.log");
         _config = new TriggerConfig(_configPath);
         _macros = new MacroLibrary(_macrosPath);
 
@@ -419,39 +416,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     //  Logging
     // ═══════════════════════════════════════════════════════════════
 
-    private const long LogMaxBytes = 5 * 1024 * 1024; // 5 MB
-    private int _logWriteCount;
-
-    private void Log(string message)
-    {
-        try
-        {
-            string line = $"{DateTime.Now:HH:mm:ss.fff} {message}";
-            Debug.WriteLine(line);
-            File.AppendAllText(_logPath, line + Environment.NewLine);
-
-            if (++_logWriteCount % 50 == 0)
-                RotateLogIfNeeded();
-        }
-        catch
-        {
-            // Never crash because of logging
-        }
-    }
-
-    private void RotateLogIfNeeded()
-    {
-        try
-        {
-            var info = new FileInfo(_logPath);
-            if (!info.Exists || info.Length < LogMaxBytes) return;
-
-            string backup = _logPath + ".1";
-            if (File.Exists(backup)) File.Delete(backup);
-            File.Move(_logPath, backup);
-        }
-        catch { }
-    }
+    private static void Log(string message) => AppLog.Write(message);
 
     // ═══════════════════════════════════════════════════════════════
     //  Cleanup

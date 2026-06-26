@@ -93,7 +93,7 @@ internal sealed class TriggerConfig : IDisposable
         {
             new() { Trigger = "@@", Value = "your_email@domain.com", Context = "*", Action = "text" },
             new() { Trigger = "!tel", Value = "+7 (999) 123-45-67", Context = "*", Action = "text" },
-            new() { Trigger = "!date", Value = DateTime.Now.ToString("dd.MM.yyyy"), Context = "*", Action = "text" },
+            new() { Trigger = "!date", Value = "{date}", Context = "*", Action = "text" },
             new() { Trigger = "!sig", Value = "С уважением,\nИван Иванов\nООО «ПроектСтрой»", Context = "*", Action = "text" },
             new() { Trigger = "!path", Value = @"\\server\projects\2026\", Context = "*", Action = "text" },
             new() { Trigger = "!db", Value = "_MYBEAMPLUGIN", Context = "acad", Action = "text" },

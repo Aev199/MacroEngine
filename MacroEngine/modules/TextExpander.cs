@@ -339,71 +339,6 @@ internal static class TextExpander
         return hMem;
     }
 
-    private static void WriteClipboardRtf(string rtf, string plainText)
-    {
-        uint cfRtf = NativeMethods.RegisterClipboardFormat("Rich Text Format");
-
-        if (!NativeMethods.OpenClipboard(IntPtr.Zero))
-        {
-            LogToFile("[RichText] OpenClipboard failed");
-            return;
-        }
-
-        try
-        {
-            NativeMethods.EmptyClipboard();
-
-            // RTF is always 8-bit ANSI (not UTF-16!)
-            IntPtr hRtf = AllocAndWriteAnsi(rtf);
-            if (hRtf != IntPtr.Zero)
-                NativeMethods.SetClipboardData(cfRtf, hRtf);
-
-            // Plain text fallback (UTF-16)
-            IntPtr hText = AllocAndWriteUnicode(plainText);
-            if (hText != IntPtr.Zero)
-                NativeMethods.SetClipboardData(NativeMethods.CF_UNICODETEXT, hText);
-        }
-        finally
-        {
-            NativeMethods.CloseClipboard();
-        }
-    }
-
-    private static IntPtr AllocAndWriteAnsi(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return IntPtr.Zero;
-        byte[] bytes = System.Text.Encoding.Default.GetBytes(text);
-        int size = bytes.Length + 1; // + null terminator
-        IntPtr hMem = NativeMethods.GlobalAlloc(0x0002, (UIntPtr)size);
-        if (hMem == IntPtr.Zero) return IntPtr.Zero;
-
-        IntPtr ptr = NativeMethods.GlobalLock(hMem);
-        if (ptr != IntPtr.Zero)
-        {
-            Marshal.Copy(bytes, 0, ptr, bytes.Length);
-            Marshal.WriteByte(ptr, bytes.Length, 0); // null terminator
-            NativeMethods.GlobalUnlock(hMem);
-        }
-        return hMem;
-    }
-
-    private static IntPtr AllocAndWriteUnicode(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return IntPtr.Zero;
-        int bytes = (text.Length + 1) * 2;
-        IntPtr hMem = NativeMethods.GlobalAlloc(0x0002, (UIntPtr)bytes);
-        if (hMem == IntPtr.Zero) return IntPtr.Zero;
-
-        IntPtr ptr = NativeMethods.GlobalLock(hMem);
-        if (ptr != IntPtr.Zero)
-        {
-            Marshal.Copy(text.ToCharArray(), 0, ptr, text.Length);
-            Marshal.WriteInt16(ptr, text.Length * 2, 0);
-            NativeMethods.GlobalUnlock(hMem);
-        }
-        return hMem;
-    }
-
     /// <summary>Strip RTF tags, return plain text.</summary>
     private static string StripRtf(string rtf)
     {
@@ -460,14 +395,5 @@ internal static class TextExpander
         NativeMethods.SendInput(4, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
     }
 
-    private static void LogToFile(string message)
-    {
-        try
-        {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "macroengine.log");
-            string line = $"{DateTime.Now:HH:mm:ss.fff} {message}";
-            File.AppendAllText(path, line + Environment.NewLine);
-        }
-        catch { /* never crash from logging */ }
-    }
+    private static void LogToFile(string message) => Core.AppLog.Write(message);
 }

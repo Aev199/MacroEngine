@@ -111,13 +111,5 @@ internal static class ScriptRunner
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "...";
 
-    private static void Log(string message)
-    {
-        try
-        {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "macroengine.log");
-            File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {message}\n");
-        }
-        catch { }
-    }
+    private static void Log(string message) => Core.AppLog.Write(message);
 }

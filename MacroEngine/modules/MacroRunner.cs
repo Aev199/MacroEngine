@@ -241,13 +241,5 @@ internal static class MacroRunner
         catch (Exception ex) { Log($"[Macro] run failed '{command}': {ex.Message}"); }
     }
 
-    private static void Log(string message)
-    {
-        try
-        {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "macroengine.log");
-            File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {message}\n");
-        }
-        catch { }
-    }
+    private static void Log(string message) => Core.AppLog.Write(message);
 }
