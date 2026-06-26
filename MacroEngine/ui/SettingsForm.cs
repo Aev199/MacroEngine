@@ -66,7 +66,8 @@ internal sealed class SettingsForm : Form
         {
             Text = "Тип: Текст — набранный триггер | Шорткат — прямое сочетание | " +
                    "Лидер — удерживаемый аккорд (Ctrl/Alt) + клавиши «остатка» из поля «Триггер» (напр. gm). " +
-                   "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере.",
+                   "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере. " +
+                   "Токены в значении: {date} {time} {datetime:HH:mm} {clipboard} {input:подпись} {choice:a|b|c} {cursor}.",
             AutoSize = true,
             ForeColor = Color.Gray,
             Dock = DockStyle.Top,

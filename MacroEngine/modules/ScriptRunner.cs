@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace MacroEngine.Modules;
 
@@ -72,11 +73,26 @@ internal static class ScriptRunner
                 return;
             }
 
-            // Read output with timeout
-            process.WaitForExit(30_000); // 30 second timeout
+            // Read stdout/stderr asynchronously. Reading after WaitForExit (or with
+            // synchronous ReadToEnd before it) can deadlock when the child fills the
+            // pipe buffer, so drain via events while the process runs.
+            var sbOut = new StringBuilder();
+            var sbErr = new StringBuilder();
+            process.OutputDataReceived += (_, e) => { if (e.Data != null) sbOut.AppendLine(e.Data); };
+            process.ErrorDataReceived  += (_, e) => { if (e.Data != null) sbErr.AppendLine(e.Data); };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
 
-            string stdout = process.StandardOutput.ReadToEnd().Trim();
-            string stderr = process.StandardError.ReadToEnd().Trim();
+            if (!process.WaitForExit(30_000)) // 30 second timeout
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                Log($"[Script] TIMEOUT [{triggerName}] killed after 30s: {command}");
+                return;
+            }
+            process.WaitForExit(); // let async readers flush remaining output
+
+            string stdout = sbOut.ToString().Trim();
+            string stderr = sbErr.ToString().Trim();
 
             if (process.ExitCode == 0)
             {

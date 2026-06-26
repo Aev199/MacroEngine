@@ -80,6 +80,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         menu.Items.Add(new ToolStripSeparator());
 
+        var autostartItem = new ToolStripMenuItem("Автозапуск при входе в Windows", null, OnToggleAutostart)
+        {
+            CheckOnClick = true,
+            Checked = Autostart.IsEnabled()
+        };
+        menu.Items.Add(autostartItem);
+
+        menu.Items.Add(new ToolStripSeparator());
+
         var quitItem = new ToolStripMenuItem("Выход", null, OnQuit);
         menu.Items.Add(quitItem);
 
@@ -329,6 +338,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
             StopEngine();
         else
             StartEngine();
+    }
+
+    private void OnToggleAutostart(object? sender, EventArgs e)
+    {
+        if (sender is not ToolStripMenuItem item) return;
+        try
+        {
+            Autostart.SetEnabled(item.Checked);
+            Log($"Autostart {(item.Checked ? "enabled" : "disabled")}");
+        }
+        catch (Exception ex)
+        {
+            Log($"Autostart toggle failed: {ex.Message}");
+            item.Checked = Autostart.IsEnabled();
+            MessageBox.Show($"Не удалось изменить автозапуск:\n{ex.Message}",
+                "MacroEngine", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private void OnReloadConfig(object? sender, EventArgs e)
