@@ -266,6 +266,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         Log($"  [TRIGGER] matched! trigger='{entry.Trigger}' action={entry.Action} replacement='{entry.Value}'");
 
+        // Leader and shortcut keys are swallowed before they reach the target app,
+        // so there is nothing in the document to erase. Only typed-text triggers
+        // leave their trigger characters behind.
+        int eraseLen = string.IsNullOrEmpty(entry.Leader) ? entry.Trigger.Length : 0;
+
         switch (entry.Action.ToLowerInvariant())
         {
             case "script":
@@ -273,16 +278,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 break;
 
             case "richtext":
-                RunOnStaThread(() => TextExpander.ExpandRichText(entry.Value, entry.Trigger.Length));
+                RunOnStaThread(() => TextExpander.ExpandRichText(entry.Value, eraseLen));
                 break;
 
             case "lisp":
-                RunOnStaThread(() => TextExpander.LoadLisp(entry.Value, entry.Trigger.Length));
+                RunOnStaThread(() => TextExpander.LoadLisp(entry.Value, eraseLen));
                 break;
 
             case "text":
             default:
-                RunOnStaThread(() => TextExpander.Expand(entry.Value, entry.Trigger.Length));
+                RunOnStaThread(() => TextExpander.Expand(entry.Value, eraseLen));
                 break;
         }
     }
