@@ -189,7 +189,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // Skip suppressed events (during our own expansion)
         if (KeyInterceptor.IsSuppressed) return;
 
-        // ── Hotkey / leader detection ─────────────────────────────
+        // ── Hotkey detection ──────────────────────────────────────
         // Fires for Ctrl/Alt combos and for standalone F1–F24.
         bool isFKey = args.VirtualKeyCode >= 0x70 && args.VirtualKeyCode <= 0x7B;
         if (args.Control || args.Alt || isFKey)
@@ -202,9 +202,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             string keyName = KeyInterceptor.VkToName(args.VirtualKeyCode);
             if (keyName.Length > 0)
             {
-                string fp = WindowContext.GetContextFingerprint();
-
-                // 1. Direct hotkey (Шорткат)
                 string combo = mods.Count > 0
                     ? string.Join("+", mods) + "+" + keyName
                     : keyName;
