@@ -57,8 +57,20 @@ internal sealed class PromptForm : Form
         AcceptButton = ok;
         CancelButton = cancel;
 
+        int remaining = 60;
+        Text = "MacroEngine (60с)";
+        var countdown = new System.Windows.Forms.Timer { Interval = 1000 };
+        countdown.Tick += (_, _) =>
+        {
+            if (--remaining <= 0) { countdown.Stop(); DialogResult = DialogResult.Cancel; Close(); return; }
+            Text = $"MacroEngine ({remaining}с)";
+        };
+        Activated += (_, _) => remaining = 60;
+        countdown.Start();
+
         FormClosing += (_, _) =>
         {
+            countdown.Stop();
             Value = DialogResult == DialogResult.OK
                 ? (_combo != null ? _combo.SelectedItem?.ToString() ?? "" : _text?.Text ?? "")
                 : "";
