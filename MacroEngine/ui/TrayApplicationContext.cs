@@ -21,6 +21,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly MacroLibrary _macros;
     private readonly string _configPath;
     private readonly string _macrosPath;
+    private readonly LeaderOverlayForm _leaderOverlay;
 
     private bool _isRunning;
     private uint _lastForegroundProcessId;
@@ -80,7 +81,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         var reloadItem = new ToolStripMenuItem("Перезагрузить конфиг", null, OnReloadConfig);
         menu.Items.Add(reloadItem);
 
-        var settingsItem = new ToolStripMenuItem("Редактор триггеров...", null, OnOpenSettings);
+        var settingsItem = new ToolStripMenuItem("Настройки...", null, OnOpenSettings);
         menu.Items.Add(settingsItem);
 
         menu.Items.Add(new ToolStripSeparator());
@@ -99,8 +100,21 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _trayIcon.ContextMenuStrip = menu;
 
+        // ── Leader overlay ───────────────────────────────────────
+        _leaderOverlay = new LeaderOverlayForm();
+
         // ── Start automatically ──────────────────────────────────
         StartEngine();
+
+        // ── First-run balloon ────────────────────────────────────
+        string firstRunPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".firstrun");
+        if (!File.Exists(firstRunPath))
+        {
+            try { File.WriteAllText(firstRunPath, ""); } catch { }
+            _trayIcon.ShowBalloonTip(5000, "MacroEngine",
+                "MacroEngine запущен! Правый клик по иконке в трее → Настройки.",
+                ToolTipIcon.Info);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -226,6 +240,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                     if (IsSystemHotkey(combo))
                     {
                         _inputBuffer.ResetLeader();
+                        _leaderOverlay.HideOverlay();
                     }
                     else
                     {
@@ -234,10 +249,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
                         if (swallow) KeyInterceptor.SuppressKey = true;
                         if (fired)
                         {
+                            _leaderOverlay.ShowMatched(modPrefix, _inputBuffer.LastMatchedLeaderSeq);
                             Log($"  [LEADER] {modPrefix} + '{keyName}' matched");
                             return;
                         }
-                        if (swallow) return; // sequence still building — don't feed the text buffer
+                        if (swallow)
+                        {
+                            _leaderOverlay.ShowLeader(modPrefix, _inputBuffer.CurrentLeaderSeq);
+                            return;
+                        }
+                        _leaderOverlay.HideOverlay();
                     }
                 }
             }
@@ -404,6 +425,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         StopEngine();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _leaderOverlay.Dispose();
         _config.Dispose();
         _macros.Dispose();
         _interceptor.Dispose();
@@ -428,6 +450,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             StopEngine();
             _trayIcon?.Dispose();
+            _leaderOverlay?.Dispose();
             _config?.Dispose();
             _macros?.Dispose();
             _interceptor?.Dispose();
