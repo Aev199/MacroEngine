@@ -419,6 +419,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
     //  Logging
     // ═══════════════════════════════════════════════════════════════
 
+    private const long LogMaxBytes = 5 * 1024 * 1024; // 5 MB
+    private int _logWriteCount;
+
     private void Log(string message)
     {
         try
@@ -426,11 +429,28 @@ internal sealed class TrayApplicationContext : ApplicationContext
             string line = $"{DateTime.Now:HH:mm:ss.fff} {message}";
             Debug.WriteLine(line);
             File.AppendAllText(_logPath, line + Environment.NewLine);
+
+            if (++_logWriteCount % 50 == 0)
+                RotateLogIfNeeded();
         }
         catch
         {
             // Never crash because of logging
         }
+    }
+
+    private void RotateLogIfNeeded()
+    {
+        try
+        {
+            var info = new FileInfo(_logPath);
+            if (!info.Exists || info.Length < LogMaxBytes) return;
+
+            string backup = _logPath + ".1";
+            if (File.Exists(backup)) File.Delete(backup);
+            File.Move(_logPath, backup);
+        }
+        catch { }
     }
 
     // ═══════════════════════════════════════════════════════════════
