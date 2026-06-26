@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using MacroEngine.Core;
+using MacroEngine.UI;
 
 namespace MacroEngine.Modules;
 
@@ -11,11 +13,19 @@ internal static class TextExpander
 {
     private const int VK_BACK = 0x08;
     private const int VK_RETURN = 0x0D;
+    private const int VK_LEFT = 0x25;
+    private const string CursorMarker = "{cursor}";
 
     /// <summary>Perform text expansion.</summary>
     public static void Expand(string rawReplacement, int triggerLength)
     {
         KeyInterceptor.IsSuppressed = true;
+
+        // Capture the target window up front so we can restore focus if a
+        // {input}/{choice} prompt steals it during token resolution.
+        IntPtr target = NativeMethods.GetForegroundWindow();
+        bool mayPrompt = MayPrompt(rawReplacement);
+
         try
         {
             Thread.Sleep(60);
@@ -27,7 +37,27 @@ internal static class TextExpander
             Thread.Sleep(30);
 
             string replacement = ResolveTokens(rawReplacement);
+
+            if (mayPrompt && target != IntPtr.Zero)
+            {
+                NativeMethods.SetForegroundWindow(target);
+                Thread.Sleep(50);
+            }
+
+            // {cursor} marks where the caret should land — type everything, then
+            // walk the caret back over the characters that follow the marker.
+            int caretBack = 0;
+            int idx = replacement.IndexOf(CursorMarker, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                caretBack = replacement.Length - (idx + CursorMarker.Length);
+                replacement = replacement.Remove(idx, CursorMarker.Length);
+            }
+
             TypeUnicode(replacement);
+
+            for (int i = 0; i < caretBack; i++)
+                SendKeyDownUp(VK_LEFT);
         }
         finally { KeyInterceptor.IsSuppressed = false; }
     }
@@ -93,13 +123,54 @@ internal static class TextExpander
 
     private static string ResolveTokens(string text)
     {
-        return text
+        // Custom date/time format: {datetime:HH:mm} or {datetime:yyyy-MM-dd}
+        text = Regex.Replace(text, @"\{datetime:([^}]*)\}", m =>
+        {
+            try { return DateTime.Now.ToString(m.Groups[1].Value); }
+            catch { return m.Value; }
+        });
+
+        text = text
             .Replace("{date}", DateTime.Now.ToString("dd.MM.yyyy"))
             .Replace("{time}", DateTime.Now.ToString("HH:mm"))
             .Replace("{datetime}", DateTime.Now.ToString("dd.MM.yyyy HH:mm"))
             .Replace("{year}", DateTime.Now.Year.ToString())
             .Replace("{clipboard}", ReadClipboardSafe());
+
+        // {input} or {input:Подпись} — prompt the user for free text.
+        text = Regex.Replace(text, @"\{input(?::([^}]*))?\}", m =>
+        {
+            string label = m.Groups[1].Success && m.Groups[1].Value.Length > 0
+                ? m.Groups[1].Value
+                : "Введите значение:";
+            return PromptForm.AskText(label);
+        });
+
+        // {choice:a|b|c} — let the user pick one option.
+        text = Regex.Replace(text, @"\{choice:([^}]*)\}", m =>
+        {
+            var opts = m.Groups[1].Value.Split('|',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            return opts.Length > 0 ? PromptForm.AskChoice("Выберите:", opts) : "";
+        });
+
+        return text;
     }
+
+    /// <summary>
+    /// Resolve tokens and type the text, without erasing anything beforehand.
+    /// Used by macro "type" steps. The caller manages <see cref="KeyInterceptor.IsSuppressed"/>.
+    /// </summary>
+    public static void TypeText(string raw)
+    {
+        string s = ResolveTokens(raw).Replace(CursorMarker, "", StringComparison.OrdinalIgnoreCase);
+        TypeUnicode(s);
+    }
+
+    /// <summary>True if resolving the text will pop a modal prompt that can steal focus.</summary>
+    private static bool MayPrompt(string text) =>
+        text.Contains("{input", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("{choice", StringComparison.OrdinalIgnoreCase);
 
     private static string ReadClipboardSafe()
     {
@@ -182,7 +253,9 @@ internal static class TextExpander
     private static void SendKeyDownUp(int vkCode)
     {
         uint scanCode = NativeMethods.MapVirtualKey((uint)vkCode, NativeMethods.MAPVK_VK_TO_VSC);
-        uint flags = (vkCode == VK_BACK) ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u;
+        // Arrow keys (0x25–0x28) are extended keys; keep the existing VK_BACK flag too.
+        bool extended = vkCode == VK_BACK || (vkCode >= 0x25 && vkCode <= 0x28);
+        uint flags = extended ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u;
 
         var inputs = new[]
         {

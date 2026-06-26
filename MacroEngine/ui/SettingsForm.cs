@@ -1,32 +1,43 @@
 using MacroEngine.Core;
-using System.Data;
 
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Visual editor for triggers.json.
+/// Visual editor with two tabs:
+///   «Триггеры» — the trigger table (text / shortcut / leader, contexts, actions).
+///   «Макросы»  — named, reusable macros (name + step script). A trigger with
+///                action "macro" references a macro by name via a dropdown.
 ///
 /// Trigger activation types:
 ///   Текст   — typed text trigger (stored as TriggerEntry.Trigger)
 ///   Шорткат — direct hotkey (stored as TriggerEntry.Hotkey)
-///   Лидер   — hotkey activates leader mode, then text completes it
-///             (stored as TriggerEntry.Leader + TriggerEntry.Trigger)
+///   Лидер   — held modifier chord + typed rest (TriggerEntry.Leader + .Trigger)
 /// </summary>
 internal sealed class SettingsForm : Form
 {
     private readonly TriggerConfig _config;
+    private readonly MacroLibrary _macros;
     private readonly List<TriggerEntry> _triggers;
+    private readonly List<MacroDef> _macroDefs;
+
+    // ── Trigger tab ─────────────────────────────────────────────────
     private readonly DataGridView _grid;
-    private readonly Button _btnAdd;
-    private readonly Button _btnDelete;
     private readonly Button _btnSave;
-    private readonly Button _btnClose;
     private readonly Label _lblHint;
     private readonly FlowLayoutPanel _filterPanel;
 
     private string _filterContext = "Все";
     private bool _dirty;
     private bool _loading;
+
+    // ── Macro tab ───────────────────────────────────────────────────
+    private readonly ListBox _macroList;
+    private readonly TextBox _macroName;
+    private readonly TextBox _macroSteps;
+    private readonly Button _macroBtnSave;
+    private int _macroCurrent = -1;
+    private bool _macroLoading;
+    private bool _macroDirty;
 
     // ── Column names ────────────────────────────────────────────────
     private const string ColType    = "Type";
@@ -38,13 +49,15 @@ internal sealed class SettingsForm : Form
 
     private static readonly Color HotkeyActiveColor = Color.FromArgb(0, 100, 200);
 
-    public SettingsForm(TriggerConfig config)
+    public SettingsForm(TriggerConfig config, MacroLibrary macros)
     {
         _config = config;
+        _macros = macros;
         _triggers = config.Load();
+        _macroDefs = macros.Load();
 
-        Text = "MacroEngine — Редактор триггеров";
-        Size = new Size(860, 520);
+        Text = "MacroEngine — Редактор";
+        Size = new Size(880, 560);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = false;
@@ -52,7 +65,7 @@ internal sealed class SettingsForm : Form
         Icon = AppIcon.Get();
         Padding = new Padding(10);
 
-        // ── Filter tabs ────────────────────────────────────────────
+        // Controls created here, laid out by the Build* helpers below.
         _filterPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
@@ -60,21 +73,73 @@ internal sealed class SettingsForm : Form
             Padding = new Padding(0, 0, 0, 4),
             AutoSize = true
         };
-
-        // ── Hint ──────────────────────────────────────────────────
         _lblHint = new Label
         {
             Text = "Тип: Текст — набранный триггер | Шорткат — прямое сочетание | " +
                    "Лидер — удерживаемый аккорд (Ctrl/Alt) + клавиши «остатка» из поля «Триггер» (напр. gm). " +
-                   "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере.",
+                   "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере. " +
+                   "Токены: {date} {time} {datetime:HH:mm} {clipboard} {input:подпись} {choice:a|b|c} {cursor}. " +
+                   "Действие «macro»: выберите макрос из списка (создаются на вкладке «Макросы»).",
             AutoSize = true,
             ForeColor = Color.Gray,
             Dock = DockStyle.Top,
             Padding = new Padding(0, 0, 0, 4)
         };
+        _grid = BuildGrid();
+        _btnSave = new Button { Text = "💾 Сохранить", Width = 110, Enabled = false };
 
-        // ── Grid ──────────────────────────────────────────────────
-        _grid = new DataGridView
+        _macroList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
+        _macroName = new TextBox { Dock = DockStyle.Fill };
+        _macroSteps = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            AcceptsReturn = true,
+            WordWrap = false,
+            ScrollBars = ScrollBars.Both,
+            Font = new Font(FontFamily.GenericMonospace, 9.5f)
+        };
+        _macroBtnSave = new Button { Text = "💾 Сохранить макросы", Width = 170, Enabled = false };
+
+        // ── Tabs ──────────────────────────────────────────────────
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var tabTriggers = new TabPage("Триггеры");
+        var tabMacros   = new TabPage("Макросы");
+        BuildTriggersTab(tabTriggers);
+        BuildMacrosTab(tabMacros);
+        tabs.TabPages.Add(tabTriggers);
+        tabs.TabPages.Add(tabMacros);
+        tabs.SelectedIndexChanged += (_, _) =>
+        {
+            if (tabs.SelectedTab == tabTriggers) RefreshMacroValueCells();
+        };
+
+        var bottom = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.RightToLeft,
+            Padding = new Padding(0, 8, 0, 0),
+            AutoSize = true
+        };
+        var btnClose = new Button { Text = "Закрыть", Width = 90 };
+        btnClose.Click += (_, _) => Close();
+        bottom.Controls.Add(btnClose);
+
+        Controls.Add(tabs);
+        Controls.Add(bottom);
+
+        PopulateGrid();
+        PopulateFilters();
+        PopulateMacroList();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Trigger tab construction
+    // ═══════════════════════════════════════════════════════════════
+
+    private DataGridView BuildGrid()
+    {
+        var grid = new DataGridView
         {
             Dock = DockStyle.Fill,
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
@@ -88,7 +153,7 @@ internal sealed class SettingsForm : Form
             BackgroundColor = SystemColors.Window
         };
 
-        _grid.Columns.Add(new DataGridViewComboBoxColumn
+        grid.Columns.Add(new DataGridViewComboBoxColumn
         {
             Name = ColType,
             HeaderText = "Тип",
@@ -97,17 +162,14 @@ internal sealed class SettingsForm : Form
             DataSource = new[] { "Текст", "Шорткат", "Лидер" },
             FlatStyle = FlatStyle.Flat
         });
-
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        grid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = ColTrigger,
             HeaderText = "Триггер",
             FillWeight = 12,
             MinimumWidth = 65
         });
-
-        // Always ReadOnly — opened via mouse click for Шорткат/Лидер rows.
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        grid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = ColHotkey,
             HeaderText = "Шорткат / Лидер",
@@ -115,73 +177,132 @@ internal sealed class SettingsForm : Form
             MinimumWidth = 120,
             ReadOnly = true
         });
-
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        grid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = ColValue,
             HeaderText = "Значение",
             FillWeight = 33,
             MinimumWidth = 100
         });
-
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        grid.Columns.Add(new DataGridViewTextBoxColumn
         {
             Name = ColContext,
             HeaderText = "Контекст",
             FillWeight = 14,
             MinimumWidth = 70
         });
-
-        _grid.Columns.Add(new DataGridViewComboBoxColumn
+        grid.Columns.Add(new DataGridViewComboBoxColumn
         {
             Name = ColAction,
             HeaderText = "Действие",
             FillWeight = 11,
             MinimumWidth = 70,
-            DataSource = new[] { "text", "richtext", "script", "lisp" },
+            DataSource = new[] { "text", "richtext", "script", "lisp", "macro" },
             FlatStyle = FlatStyle.Flat
         });
 
-        _grid.CellValueChanged            += OnCellValueChanged;
-        _grid.CurrentCellDirtyStateChanged += OnCurrentCellDirty;
-        _grid.CellMouseClick              += OnCellMouseClick;
-        _grid.CellMouseEnter              += OnCellMouseEnter;
-        _grid.CellMouseLeave              += (_, _) => _grid.Cursor = Cursors.Default;
-        _grid.CellFormatting              += OnCellFormatting;
-        _grid.DataError                   += (_, e) => { /* suppress combo box type errors */ };
+        grid.CellValueChanged            += OnCellValueChanged;
+        grid.CurrentCellDirtyStateChanged += OnCurrentCellDirty;
+        grid.CellMouseClick              += OnCellMouseClick;
+        grid.CellMouseEnter              += OnCellMouseEnter;
+        grid.CellMouseLeave              += (_, _) => grid.Cursor = Cursors.Default;
+        grid.CellFormatting              += OnCellFormatting;
+        grid.DataError                   += (_, _) => { /* suppress combo box type errors */ };
+        return grid;
+    }
 
-        // ── Buttons ───────────────────────────────────────────────
-        var buttonPanel = new FlowLayoutPanel
+    private void BuildTriggersTab(TabPage tab)
+    {
+        tab.Padding = new Padding(8);
+
+        var buttons = new FlowLayoutPanel
         {
             Dock = DockStyle.Bottom,
             FlowDirection = FlowDirection.LeftToRight,
             Padding = new Padding(0, 8, 0, 0),
             AutoSize = true
         };
+        var btnAdd    = new Button { Text = "➕ Добавить", Width = 110 };
+        var btnDelete = new Button { Text = "🗑 Удалить",  Width = 110 };
+        btnAdd.Click    += OnAdd;
+        btnDelete.Click += OnDelete;
+        _btnSave.Click  += OnSave;
+        buttons.Controls.AddRange(new Control[] { btnAdd, btnDelete, _btnSave });
 
-        _btnAdd    = new Button { Text = "➕ Добавить",  Width = 110 };
-        _btnDelete = new Button { Text = "🗑 Удалить",   Width = 110 };
-        _btnSave   = new Button { Text = "💾 Сохранить", Width = 110, Enabled = false };
-        _btnClose  = new Button { Text = "Закрыть",      Width = 90 };
+        tab.Controls.Add(_grid);        // Fill
+        tab.Controls.Add(_lblHint);     // Top
+        tab.Controls.Add(_filterPanel); // Top
+        tab.Controls.Add(buttons);      // Bottom
+    }
 
-        _btnAdd.Click    += OnAdd;
-        _btnDelete.Click += OnDelete;
-        _btnSave.Click   += OnSave;
-        _btnClose.Click  += (_, _) => Close();
+    // ═══════════════════════════════════════════════════════════════
+    //  Macro tab construction
+    // ═══════════════════════════════════════════════════════════════
 
-        buttonPanel.Controls.AddRange(new Control[] { _btnAdd, _btnDelete, _btnSave, _btnClose });
+    private void BuildMacrosTab(TabPage tab)
+    {
+        tab.Padding = new Padding(8);
 
-        // ── Layout ────────────────────────────────────────────────
-        var mainPanel = new Panel { Dock = DockStyle.Fill };
-        mainPanel.Controls.Add(_grid);
-        mainPanel.Controls.Add(_lblHint);
-        mainPanel.Controls.Add(_filterPanel);
+        // Left: list of macro names + add/delete
+        var left = new Panel { Dock = DockStyle.Left, Width = 210 };
+        var leftButtons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            Padding = new Padding(0, 6, 0, 0)
+        };
+        var btnMacroAdd = new Button { Text = "➕", Width = 44 };
+        var btnMacroDel = new Button { Text = "🗑", Width = 44 };
+        btnMacroAdd.Click += OnMacroAdd;
+        btnMacroDel.Click += OnMacroDelete;
+        leftButtons.Controls.AddRange(new Control[] { btnMacroAdd, btnMacroDel });
 
-        Controls.Add(mainPanel);
-        Controls.Add(buttonPanel);
+        _macroList.SelectedIndexChanged += OnMacroListSelected;
 
-        PopulateGrid();
-        PopulateFilters();
+        left.Controls.Add(_macroList);   // Fill
+        left.Controls.Add(leftButtons);  // Bottom
+
+        // Right: name + steps editor
+        var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8, 0, 0, 0) };
+
+        var nameRow = new Panel { Dock = DockStyle.Top, Height = 28 };
+        var nameLbl = new Label { Text = "Имя:", Dock = DockStyle.Left, Width = 44, TextAlign = ContentAlignment.MiddleLeft };
+        _macroName.TextChanged += (_, _) => { if (!_macroLoading) MarkMacroDirty(); };
+        nameRow.Controls.Add(_macroName); // Fill
+        nameRow.Controls.Add(nameLbl);    // Left
+
+        var help = new Label
+        {
+            Dock = DockStyle.Bottom,
+            AutoSize = false,
+            Height = 56,
+            ForeColor = Color.Gray,
+            Text = "Шаги (по одному на строку): " +
+                   "type <текст> · key <сочетание> (Ctrl+S, Enter, F5) · sleep <мс> · " +
+                   "click/dclick/rclick x,y · run <команда>. " +
+                   "Пустые строки и строки с # игнорируются."
+        };
+
+        _macroSteps.TextChanged += (_, _) => { if (!_macroLoading) MarkMacroDirty(); };
+
+        var macroSaveRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            Padding = new Padding(0, 6, 0, 0)
+        };
+        _macroBtnSave.Click += OnMacroSave;
+        macroSaveRow.Controls.Add(_macroBtnSave);
+
+        right.Controls.Add(_macroSteps);  // Fill
+        right.Controls.Add(nameRow);      // Top
+        right.Controls.Add(help);         // Bottom
+        right.Controls.Add(macroSaveRow); // Bottom
+
+        tab.Controls.Add(right); // Fill
+        tab.Controls.Add(left);  // Left
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -200,7 +321,9 @@ internal sealed class SettingsForm : Form
                 string hotkey = t.Hotkey ?? t.Leader ?? "";
 
                 int idx = _grid.Rows.Add(type, t.Trigger, hotkey, t.Value, t.Context, t.Action);
-                ApplyRowTypeStyles(_grid.Rows[idx]);
+                var row = _grid.Rows[idx];
+                ApplyRowTypeStyles(row);
+                ApplyValueCellForAction(row);
             }
             _dirty = false;
             _btnSave.Enabled = false;
@@ -220,7 +343,7 @@ internal sealed class SettingsForm : Form
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  Row type styling
+    //  Row styling & the macro-name dropdown on the Value cell
     // ═══════════════════════════════════════════════════════════════
 
     private void ApplyRowTypeStyles(DataGridViewRow row)
@@ -242,8 +365,76 @@ internal sealed class SettingsForm : Form
         hotkeyCell.ToolTipText     = hotkeyEditable ? "Нажмите для записи сочетания клавиш" : "";
     }
 
+    /// <summary>
+    /// For action="macro" rows, turn the Value cell into a dropdown of macro names;
+    /// otherwise keep it a plain text cell. Preserves the current value.
+    /// </summary>
+    private void ApplyValueCellForAction(DataGridViewRow row)
+    {
+        string action = row.Cells[ColAction].Value?.ToString() ?? "text";
+        string current = row.Cells[ColValue].Value?.ToString() ?? "";
+
+        bool prev = _loading;
+        _loading = true;
+        try
+        {
+            if (action == "macro")
+            {
+                if (row.Cells[ColValue] is not DataGridViewComboBoxCell)
+                {
+                    var combo = new DataGridViewComboBoxCell
+                    {
+                        FlatStyle = FlatStyle.Flat,
+                        DisplayStyle = DataGridViewComboBoxDisplayStyle.ComboBox
+                    };
+                    row.Cells[ColValue] = combo;
+                }
+                FillMacroCombo((DataGridViewComboBoxCell)row.Cells[ColValue], current);
+                row.Cells[ColValue].ToolTipText = "Макрос из вкладки «Макросы»";
+            }
+            else if (row.Cells[ColValue] is DataGridViewComboBoxCell)
+            {
+                row.Cells[ColValue] = new DataGridViewTextBoxCell();
+                row.Cells[ColValue].Value = current;
+                row.Cells[ColValue].ToolTipText = "";
+            }
+        }
+        finally
+        {
+            _loading = prev;
+        }
+    }
+
+    private void FillMacroCombo(DataGridViewComboBoxCell combo, string current)
+    {
+        combo.Items.Clear();
+        foreach (var n in _macroDefs.Select(m => m.Name).Where(n => !string.IsNullOrWhiteSpace(n)))
+            combo.Items.Add(n);
+        // Keep an unknown / inline value visible instead of erroring out.
+        if (current.Length > 0 && !combo.Items.Contains(current))
+            combo.Items.Add(current);
+        combo.Value = current.Length > 0 ? current
+                    : combo.Items.Count > 0 ? combo.Items[0] : null;
+    }
+
+    /// <summary>Rebuild macro dropdown contents (called when returning to the triggers tab).</summary>
+    private void RefreshMacroValueCells()
+    {
+        bool prev = _loading;
+        _loading = true;
+        try
+        {
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                if (row.Cells[ColValue] is DataGridViewComboBoxCell combo)
+                    FillMacroCombo(combo, row.Cells[ColValue].Value?.ToString() ?? "");
+            }
+        }
+        finally { _loading = prev; }
+    }
+
     // ═══════════════════════════════════════════════════════════════
-    //  Cell formatting (display-only transformations)
+    //  Cell formatting
     // ═══════════════════════════════════════════════════════════════
 
     private void OnCellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
@@ -338,7 +529,7 @@ internal sealed class SettingsForm : Form
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  Edit tracking
+    //  Trigger edit tracking
     // ═══════════════════════════════════════════════════════════════
 
     private void OnCurrentCellDirty(object? sender, EventArgs e)
@@ -351,8 +542,11 @@ internal sealed class SettingsForm : Form
     {
         if (_loading || e.RowIndex < 0) return;
 
-        if (_grid.Columns[e.ColumnIndex].Name == ColType)
+        string col = _grid.Columns[e.ColumnIndex].Name;
+        if (col == ColType)
             ApplyRowTypeStyles(_grid.Rows[e.RowIndex]);
+        else if (col == ColAction)
+            ApplyValueCellForAction(_grid.Rows[e.RowIndex]);
 
         MarkDirty();
     }
@@ -364,7 +558,7 @@ internal sealed class SettingsForm : Form
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  Mouse handling
+    //  Trigger mouse handling
     // ═══════════════════════════════════════════════════════════════
 
     private void OnCellMouseClick(object? sender, DataGridViewCellMouseEventArgs e)
@@ -392,7 +586,7 @@ internal sealed class SettingsForm : Form
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  Add / Delete
+    //  Trigger add / delete
     // ═══════════════════════════════════════════════════════════════
 
     private void OnAdd(object? sender, EventArgs e)
@@ -432,7 +626,7 @@ internal sealed class SettingsForm : Form
     }
 
     // ═══════════════════════════════════════════════════════════════
-    //  Save
+    //  Trigger save
     // ═══════════════════════════════════════════════════════════════
 
     private void OnSave(object? sender, EventArgs e)
@@ -467,7 +661,6 @@ internal sealed class SettingsForm : Form
                     "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            // System hotkeys have the highest priority and cannot be assigned.
             if (type == "Шорткат" && SystemHotkeys.IsSystem(hotkey))
             {
                 MessageBox.Show($"Строка {i + 1}: «{hotkey}» — системное сочетание, его нельзя назначить. Выберите другое.",
@@ -506,12 +699,176 @@ internal sealed class SettingsForm : Form
     }
 
     // ═══════════════════════════════════════════════════════════════
+    //  Macro tab logic
+    // ═══════════════════════════════════════════════════════════════
+
+    private void PopulateMacroList()
+    {
+        _macroLoading = true;
+        try
+        {
+            _macroList.Items.Clear();
+            foreach (var m in _macroDefs)
+                _macroList.Items.Add(m.Name);
+
+            _macroCurrent = -1;
+            if (_macroList.Items.Count > 0)
+            {
+                _macroList.SelectedIndex = 0;
+                LoadMacroIntoEditor(0);
+            }
+            else
+            {
+                LoadMacroIntoEditor(-1);
+            }
+
+            _macroDirty = false;
+            _macroBtnSave.Enabled = false;
+        }
+        finally { _macroLoading = false; }
+    }
+
+    private void OnMacroListSelected(object? sender, EventArgs e)
+    {
+        if (_macroLoading) return;
+
+        // Flush the editor back into the previously selected macro first.
+        FlushEditorToCurrent();
+        LoadMacroIntoEditor(_macroList.SelectedIndex);
+    }
+
+    private void LoadMacroIntoEditor(int index)
+    {
+        bool prev = _macroLoading;
+        _macroLoading = true;
+        try
+        {
+            _macroCurrent = index;
+            if (index >= 0 && index < _macroDefs.Count)
+            {
+                _macroName.Text = _macroDefs[index].Name;
+                _macroSteps.Text = string.Join(Environment.NewLine, _macroDefs[index].Steps);
+                _macroName.Enabled = true;
+                _macroSteps.Enabled = true;
+            }
+            else
+            {
+                _macroName.Text = "";
+                _macroSteps.Text = "";
+                _macroName.Enabled = false;
+                _macroSteps.Enabled = false;
+            }
+        }
+        finally { _macroLoading = prev; }
+    }
+
+    /// <summary>Copy the editor fields back into the currently selected macro def.</summary>
+    private void FlushEditorToCurrent()
+    {
+        if (_macroCurrent < 0 || _macroCurrent >= _macroDefs.Count) return;
+
+        var def = _macroDefs[_macroCurrent];
+        def.Name = _macroName.Text.Trim();
+        def.Steps = _macroSteps.Text
+            .Replace("\r", "")
+            .Split('\n')
+            .ToList();
+
+        // Keep the list label in sync without re-triggering selection logic.
+        _macroLoading = true;
+        try { _macroList.Items[_macroCurrent] = def.Name; }
+        finally { _macroLoading = false; }
+    }
+
+    private void OnMacroAdd(object? sender, EventArgs e)
+    {
+        FlushEditorToCurrent();
+
+        var def = new MacroDef { Name = "новый_макрос", Steps = new List<string> { "key Ctrl+S" } };
+        _macroDefs.Add(def);
+
+        _macroLoading = true;
+        try { _macroList.Items.Add(def.Name); }
+        finally { _macroLoading = false; }
+
+        _macroList.SelectedIndex = _macroList.Items.Count - 1; // fires selection → loads editor
+        MarkMacroDirty();
+        _macroName.Focus();
+        _macroName.SelectAll();
+    }
+
+    private void OnMacroDelete(object? sender, EventArgs e)
+    {
+        int idx = _macroList.SelectedIndex;
+        if (idx < 0 || idx >= _macroDefs.Count) return;
+
+        string name = _macroDefs[idx].Name;
+        if (MessageBox.Show($"Удалить макрос «{name}»?", "MacroEngine — Подтверждение",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+
+        _macroDefs.RemoveAt(idx);
+
+        _macroLoading = true;
+        try { _macroList.Items.RemoveAt(idx); }
+        finally { _macroLoading = false; }
+
+        _macroCurrent = -1;
+        if (_macroList.Items.Count > 0)
+            _macroList.SelectedIndex = Math.Min(idx, _macroList.Items.Count - 1);
+        else
+            LoadMacroIntoEditor(-1);
+
+        MarkMacroDirty();
+    }
+
+    private void OnMacroSave(object? sender, EventArgs e)
+    {
+        FlushEditorToCurrent();
+
+        // Validate: non-empty unique names.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in _macroDefs)
+        {
+            if (string.IsNullOrWhiteSpace(m.Name))
+            {
+                MessageBox.Show("У каждого макроса должно быть имя.",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (!seen.Add(m.Name))
+            {
+                MessageBox.Show($"Имя макроса «{m.Name}» повторяется. Имена должны быть уникальными.",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+        }
+
+        _macros.Save(_macroDefs);
+        _macroDirty = false;
+        _macroBtnSave.Enabled = false;
+
+        RefreshMacroValueCells();
+
+        MessageBox.Show($"Сохранено макросов: {_macroDefs.Count}",
+            "MacroEngine", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void MarkMacroDirty()
+    {
+        _macroDirty = true;
+        _macroBtnSave.Enabled = true;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     //  Close guard
     // ═══════════════════════════════════════════════════════════════
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (_dirty)
+        FlushEditorToCurrent();
+
+        if (_dirty || _macroDirty)
         {
             var result = MessageBox.Show(
                 "Есть несохранённые изменения. Сохранить перед закрытием?",
@@ -520,9 +877,14 @@ internal sealed class SettingsForm : Form
                 MessageBoxIcon.Warning);
 
             if (result == DialogResult.Yes)
-                OnSave(this, EventArgs.Empty);
+            {
+                if (_macroDirty) OnMacroSave(this, EventArgs.Empty);
+                if (_dirty) OnSave(this, EventArgs.Empty);
+            }
             else if (result == DialogResult.Cancel)
+            {
                 e.Cancel = true;
+            }
         }
         KeyInterceptor.IsRecordingHotkey = false;
         base.OnFormClosing(e);

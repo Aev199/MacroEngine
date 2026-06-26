@@ -19,7 +19,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly KeyInterceptor _interceptor;
     private readonly InputBuffer _inputBuffer;
     private readonly TriggerConfig _config;
+    private readonly MacroLibrary _macros;
     private readonly string _configPath;
+    private readonly string _macrosPath;
     private readonly string _logPath;
 
     private bool _isRunning;
@@ -32,8 +34,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         // ── Config & log paths ──────────────────────────────────
         _configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "triggers.json");
+        _macrosPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "macros.json");
         _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "macroengine.log");
         _config = new TriggerConfig(_configPath);
+        _macros = new MacroLibrary(_macrosPath);
 
         Log("=== MacroEngine started ===");
 
@@ -50,6 +54,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         var triggers = _config.Load();
         _inputBuffer.LoadTriggers(triggers);
         _config.StartWatching();
+
+        // ── Load named macros ────────────────────────────────────
+        _macros.Load();
+        _macros.StartWatching();
 
         // ── System Tray Icon ─────────────────────────────────────
         _trayIcon = new NotifyIcon
@@ -77,6 +85,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         var settingsItem = new ToolStripMenuItem("Редактор триггеров...", null, OnOpenSettings);
         menu.Items.Add(settingsItem);
+
+        menu.Items.Add(new ToolStripSeparator());
+
+        var autostartItem = new ToolStripMenuItem("Автозапуск при входе в Windows", null, OnToggleAutostart)
+        {
+            CheckOnClick = true,
+            Checked = Autostart.IsEnabled()
+        };
+        menu.Items.Add(autostartItem);
 
         menu.Items.Add(new ToolStripSeparator());
 
@@ -285,6 +302,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 RunOnStaThread(() => TextExpander.LoadLisp(entry.Value, eraseLen));
                 break;
 
+            case "macro":
+            {
+                // entry.Value is a macro name; fall back to treating it as an inline script.
+                string script = _macros.TryGet(entry.Value.Trim(), out var def) ? def.Script : entry.Value;
+                RunOnStaThread(() => MacroRunner.Run(script, eraseLen));
+                break;
+            }
+
             case "text":
             default:
                 RunOnStaThread(() => TextExpander.Expand(entry.Value, eraseLen));
@@ -331,6 +356,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
             StartEngine();
     }
 
+    private void OnToggleAutostart(object? sender, EventArgs e)
+    {
+        if (sender is not ToolStripMenuItem item) return;
+        try
+        {
+            Autostart.SetEnabled(item.Checked);
+            Log($"Autostart {(item.Checked ? "enabled" : "disabled")}");
+        }
+        catch (Exception ex)
+        {
+            Log($"Autostart toggle failed: {ex.Message}");
+            item.Checked = Autostart.IsEnabled();
+            MessageBox.Show($"Не удалось изменить автозапуск:\n{ex.Message}",
+                "MacroEngine", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
     private void OnReloadConfig(object? sender, EventArgs e)
     {
         var triggers = _config.Load();
@@ -348,8 +390,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _suppressBalloon = true;
         try
         {
-            using var form = new SettingsForm(_config);
+            using var form = new SettingsForm(_config, _macros);
             form.ShowDialog();
+            // Pick up any macro edits made in the form.
+            _macros.Load();
         }
         finally
         {
@@ -364,6 +408,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _config.Dispose();
+        _macros.Dispose();
         _interceptor.Dispose();
         Application.Exit();
     }
@@ -399,6 +444,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             StopEngine();
             _trayIcon?.Dispose();
             _config?.Dispose();
+            _macros?.Dispose();
             _interceptor?.Dispose();
         }
         base.Dispose(disposing);

@@ -46,5 +46,35 @@
     "value": "(defun c:mycommand ()\n  (setq pt (getpoint \"\\nУкажите точку: \"))\n  (command \"_.circle\" pt 100)\n  (princ)\n)",
     "context": "acad",
     "action": "text"
+  },
+  {
+    "trigger": "!fn",
+    "value": "function {cursor}() {\n  \n}",
+    "context": "*",
+    "action": "text"
+  },
+  {
+    "trigger": "!greet",
+    "value": "Здравствуйте, {input:Имя получателя}!\n\n",
+    "context": "*",
+    "action": "text"
+  },
+  {
+    "trigger": "!status",
+    "value": "Статус: {choice:в работе|на проверке|готово}",
+    "context": "*",
+    "action": "text"
+  },
+  {
+    "trigger": "!save",
+    "value": "save_all",
+    "context": "*",
+    "action": "macro"
+  },
+  {
+    "trigger": "!demo",
+    "value": "demo",
+    "context": "*",
+    "action": "macro"
   }
 ]
