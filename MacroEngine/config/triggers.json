@@ -64,17 +64,5 @@
     "value": "Статус: {choice:в работе|на проверке|готово}",
     "context": "*",
     "action": "text"
-  },
-  {
-    "trigger": "!save",
-    "value": "save_all",
-    "context": "*",
-    "action": "macro"
-  },
-  {
-    "trigger": "!demo",
-    "value": "demo",
-    "context": "*",
-    "action": "macro"
   }
 ]

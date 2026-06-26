@@ -157,16 +157,6 @@ internal static class TextExpander
         return text;
     }
 
-    /// <summary>
-    /// Resolve tokens and type the text, without erasing anything beforehand.
-    /// Used by macro "type" steps. The caller manages <see cref="KeyInterceptor.IsSuppressed"/>.
-    /// </summary>
-    public static void TypeText(string raw)
-    {
-        string s = ResolveTokens(raw).Replace(CursorMarker, "", StringComparison.OrdinalIgnoreCase);
-        TypeUnicode(s);
-    }
-
     /// <summary>True if resolving the text will pop a modal prompt that can steal focus.</summary>
     private static bool MayPrompt(string text) =>
         text.Contains("{input", StringComparison.OrdinalIgnoreCase)
