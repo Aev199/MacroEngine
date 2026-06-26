@@ -179,20 +179,13 @@ internal sealed class KeyInterceptor : IDisposable
         {
             0x20 => "Space", 0x0D => "Enter", 0x1B => "Escape", 0x09 => "Tab",
             0x08 => "Back", 0x2E => "Delete", 0x2D => "Insert",
+            0x21 => "PageUp", 0x22 => "PageDown", 0x23 => "End", 0x24 => "Home",
             0x25 => "Left", 0x26 => "Up", 0x27 => "Right", 0x28 => "Down",
             _ => ""
         };
     }
 
-    private static void LogToFile(string message)
-    {
-        try
-        {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "macroengine.log");
-            File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {message}\n");
-        }
-        catch { }
-    }
+    private static void LogToFile(string message) => AppLog.Write(message);
 }
 
 /// <summary>
