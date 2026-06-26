@@ -474,6 +474,19 @@ internal sealed class SettingsForm : Form
                     "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            // System hotkeys have the highest priority and cannot be assigned.
+            if (type == "Шорткат" && SystemHotkeys.IsSystem(hotkey))
+            {
+                MessageBox.Show($"Строка {i + 1}: «{hotkey}» — системное сочетание, его нельзя назначить. Выберите другое.",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (type == "Лидер" && SystemHotkeys.IsSystem($"{hotkey}+{trigger}"))
+            {
+                MessageBox.Show($"Строка {i + 1}: аккорд «{hotkey}» + «{trigger}» образует системное сочетание, его нельзя назначить.",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
             list.Add(new TriggerEntry
             {

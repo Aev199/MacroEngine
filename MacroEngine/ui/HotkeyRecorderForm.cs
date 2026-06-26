@@ -128,7 +128,18 @@ internal sealed class HotkeyRecorderForm : Form
         // A modifier was released — commit if we already have a main key with modifiers.
         if (_mainKey.Length > 0 && _capturedMods.Count > 0)
         {
-            CapturedCombo = BuildCombo();
+            string combo = BuildCombo();
+
+            // System hotkeys have the highest priority and cannot be assigned.
+            if (SystemHotkeys.IsSystem(combo))
+            {
+                _label.Text = $"{combo} — системное сочетание,\nнедоступно. Выберите другое.";
+                _capturedMods.Clear();
+                _mainKey = "";
+                return;
+            }
+
+            CapturedCombo = combo;
             DialogResult = DialogResult.OK;
             Close();
         }

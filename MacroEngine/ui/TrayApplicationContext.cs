@@ -205,19 +205,26 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 }
 
                 // 2. Leader chord (≥2 held modifiers) + typed rest sequence.
-                //    Keys that continue a sequence are swallowed so the configured
-                //    leader combo overrides any system hotkey.
+                //    System hotkeys have the highest priority — never feed or swallow
+                //    them; let the OS handle the keystroke and abort any sequence.
                 if (mods.Count >= 2)
                 {
-                    string modPrefix = string.Join("+", mods);
-                    bool fired = _inputBuffer.FeedLeaderKey(modPrefix, keyName, fp, out bool swallow);
-                    if (swallow) KeyInterceptor.SuppressKey = true;
-                    if (fired)
+                    if (IsSystemHotkey(combo))
                     {
-                        Log($"  [LEADER] {modPrefix} + '{keyName}' matched");
-                        return;
+                        _inputBuffer.ResetLeader();
                     }
-                    if (swallow) return; // sequence still building — don't feed the text buffer
+                    else
+                    {
+                        string modPrefix = string.Join("+", mods);
+                        bool fired = _inputBuffer.FeedLeaderKey(modPrefix, keyName, fp, out bool swallow);
+                        if (swallow) KeyInterceptor.SuppressKey = true;
+                        if (fired)
+                        {
+                            Log($"  [LEADER] {modPrefix} + '{keyName}' matched");
+                            return;
+                        }
+                        if (swallow) return; // sequence still building — don't feed the text buffer
+                    }
                 }
             }
         }
@@ -356,15 +363,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         Application.Exit();
     }
 
-    private static readonly HashSet<string> _systemHotkeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Z", "Ctrl+Y",
-        "Ctrl+A", "Ctrl+S", "Ctrl+W", "Ctrl+Q", "Ctrl+F",
-        "Ctrl+N", "Ctrl+O", "Ctrl+P", "Ctrl+H", "Ctrl+T",
-        "Alt+Tab", "Alt+F4", "Ctrl+Esc", "Ctrl+Shift+Escape",
-    };
-
-    private static bool IsSystemHotkey(string combo) => _systemHotkeys.Contains(combo);
+    private static bool IsSystemHotkey(string combo) => SystemHotkeys.IsSystem(combo);
 
     // ═══════════════════════════════════════════════════════════════
     //  Logging

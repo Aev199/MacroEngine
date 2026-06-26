@@ -169,6 +169,13 @@ internal sealed class InputBuffer
         return false;
     }
 
+    /// <summary>Abort any leader sequence currently in progress.</summary>
+    public void ResetLeader()
+    {
+        _leaderMods = null;
+        _leaderSeq.Clear();
+    }
+
     /// <summary>
     /// Check whether <paramref name="attempt"/> exactly matches or is a prefix of any
     /// context-matching candidate's rest sequence.
