@@ -303,8 +303,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 break;
 
             case "macro":
-                RunOnStaThread(() => MacroRunner.Run(entry.Value, eraseLen));
+            {
+                // entry.Value is a macro name; fall back to treating it as an inline script.
+                string script = _macros.TryGet(entry.Value.Trim(), out var def) ? def.Script : entry.Value;
+                RunOnStaThread(() => MacroRunner.Run(script, eraseLen));
                 break;
+            }
 
             case "text":
             default:
