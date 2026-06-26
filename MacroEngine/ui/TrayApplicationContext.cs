@@ -172,19 +172,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // Skip suppressed events (during our own expansion)
         if (KeyInterceptor.IsSuppressed) return;
 
-        // ── Hotkey detection (Ctrl/Alt + Key combos) ─────────────
-        if (args.Control || args.Alt)
+        // ── Hotkey detection ──────────────────────────────────────
+        // Fires for Ctrl/Alt combos and for standalone F1–F24.
+        bool isFKey = args.VirtualKeyCode >= 0x70 && args.VirtualKeyCode <= 0x7B;
+        if (args.Control || args.Alt || isFKey)
         {
             var mods = new List<string>();
             if (args.Control) mods.Add("Ctrl");
-            if (args.Alt) mods.Add("Alt");
-            if (args.Shift) mods.Add("Shift");
-            string modStr = string.Join("+", mods);
+            if (args.Alt)     mods.Add("Alt");
+            if (args.Shift)   mods.Add("Shift");
 
             string keyName = KeyInterceptor.VkToName(args.VirtualKeyCode);
             if (keyName.Length > 0)
             {
-                string combo = modStr + "+" + keyName;
+                string combo = mods.Count > 0
+                    ? string.Join("+", mods) + "+" + keyName
+                    : keyName;
+
                 if (!IsSystemHotkey(combo))
                 {
                     string fp = WindowContext.GetContextFingerprint();
