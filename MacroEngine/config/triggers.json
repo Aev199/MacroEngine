@@ -64,5 +64,17 @@
     "value": "Статус: {choice:в работе|на проверке|готово}",
     "context": "*",
     "action": "text"
+  },
+  {
+    "trigger": "!save",
+    "value": "key Ctrl+S",
+    "context": "*",
+    "action": "macro"
+  },
+  {
+    "trigger": "!demo",
+    "value": "# простой макрос: печать, пауза, перенос строки, токен\ntype Привет!\nsleep 200\nkey Enter\ntype Сформировано {time}",
+    "context": "*",
+    "action": "macro"
   }
 ]

@@ -294,6 +294,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 RunOnStaThread(() => TextExpander.LoadLisp(entry.Value, eraseLen));
                 break;
 
+            case "macro":
+                RunOnStaThread(() => MacroRunner.Run(entry.Value, eraseLen));
+                break;
+
             case "text":
             default:
                 RunOnStaThread(() => TextExpander.Expand(entry.Value, eraseLen));
