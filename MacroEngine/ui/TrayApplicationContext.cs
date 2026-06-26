@@ -189,7 +189,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // Skip suppressed events (during our own expansion)
         if (KeyInterceptor.IsSuppressed) return;
 
-        // ── Hotkey detection ──────────────────────────────────────
+        // ── Hotkey / leader detection ─────────────────────────────
         // Fires for Ctrl/Alt combos and for standalone F1–F24.
         bool isFKey = args.VirtualKeyCode >= 0x70 && args.VirtualKeyCode <= 0x7B;
         if (args.Control || args.Alt || isFKey)
@@ -202,6 +202,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
             string keyName = KeyInterceptor.VkToName(args.VirtualKeyCode);
             if (keyName.Length > 0)
             {
+                string fp = WindowContext.GetContextFingerprint();
+
+                // 1. Direct hotkey (Шорткат)
                 string combo = mods.Count > 0
                     ? string.Join("+", mods) + "+" + keyName
                     : keyName;
@@ -219,26 +222,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 }
 
                 // 2. Leader chord (≥2 held modifiers) + typed rest sequence.
-                //    System hotkeys have the highest priority — never feed or swallow
-                //    them; let the OS handle the keystroke and abort any sequence.
+                //    Keys that continue a sequence are swallowed so the configured
+                //    leader combo overrides any system hotkey.
                 if (mods.Count >= 2)
                 {
-                    if (IsSystemHotkey(combo))
+                    string modPrefix = string.Join("+", mods);
+                    bool fired = _inputBuffer.FeedLeaderKey(modPrefix, keyName, fp, out bool swallow);
+                    if (swallow) KeyInterceptor.SuppressKey = true;
+                    if (fired)
                     {
-                        _inputBuffer.ResetLeader();
+                        Log($"  [LEADER] {modPrefix} + '{keyName}' matched");
+                        return;
                     }
-                    else
-                    {
-                        string modPrefix = string.Join("+", mods);
-                        bool fired = _inputBuffer.FeedLeaderKey(modPrefix, keyName, fp, out bool swallow);
-                        if (swallow) KeyInterceptor.SuppressKey = true;
-                        if (fired)
-                        {
-                            Log($"  [LEADER] {modPrefix} + '{keyName}' matched");
-                            return;
-                        }
-                        if (swallow) return; // sequence still building — don't feed the text buffer
-                    }
+                    if (swallow) return; // sequence still building — don't feed the text buffer
                 }
             }
         }

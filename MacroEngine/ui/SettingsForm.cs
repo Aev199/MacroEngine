@@ -85,7 +85,8 @@ internal sealed class SettingsForm : Form
         // ── Hint ──────────────────────────────────────────────────
         _lblHint = new Label
         {
-            Text = "Тип: Текст — набранный триггер | Шорткат — прямое сочетание | Лидер — шорткат+текст. " +
+            Text = "Тип: Текст — набранный триггер | Шорткат — прямое сочетание | " +
+                   "Лидер — удерживаемый аккорд (Ctrl/Alt) + клавиши «остатка» из поля «Триггер» (напр. gm). " +
                    "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере.",
             AutoSize = true,
             ForeColor = Color.Gray,
@@ -410,7 +411,7 @@ internal sealed class SettingsForm : Form
         string type = row.Cells[ColType].Value?.ToString() ?? "Текст";
         if (type == "Текст") return;
 
-        using var recorder = new HotkeyRecorderForm();
+        using var recorder = new HotkeyRecorderForm(leaderMode: type == "Лидер");
         if (recorder.ShowDialog(this) == DialogResult.OK && recorder.CapturedCombo.Length > 0)
         {
             row.Cells[ColHotkey].Value = recorder.CapturedCombo;
@@ -493,6 +494,12 @@ internal sealed class SettingsForm : Form
             if (type is "Шорткат" or "Лидер" && string.IsNullOrEmpty(hotkey))
             {
                 MessageBox.Show($"Строка {i + 1}: сочетание клавиш не записано. Нажмите на ячейку «Шорткат / Лидер».",
+                    "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (type == "Лидер" && string.IsNullOrEmpty(trigger))
+            {
+                MessageBox.Show($"Строка {i + 1}: для лидера в поле «Триггер» укажите «остаток» — клавиши, которые набираются при зажатом аккорде (напр. gm).",
                     "MacroEngine — Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
