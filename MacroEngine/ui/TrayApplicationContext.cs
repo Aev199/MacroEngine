@@ -172,7 +172,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // Skip suppressed events (during our own expansion)
         if (KeyInterceptor.IsSuppressed) return;
 
-        // ── Hotkey detection ──────────────────────────────────────
+        // ── Hotkey / leader detection ─────────────────────────────
         // Fires for Ctrl/Alt combos and for standalone F1–F24.
         bool isFKey = args.VirtualKeyCode >= 0x70 && args.VirtualKeyCode <= 0x7B;
         if (args.Control || args.Alt || isFKey)
@@ -185,27 +185,39 @@ internal sealed class TrayApplicationContext : ApplicationContext
             string keyName = KeyInterceptor.VkToName(args.VirtualKeyCode);
             if (keyName.Length > 0)
             {
+                string fp = WindowContext.GetContextFingerprint();
+
+                // 1. Direct hotkey (Шорткат)
                 string combo = mods.Count > 0
                     ? string.Join("+", mods) + "+" + keyName
                     : keyName;
 
                 if (!IsSystemHotkey(combo))
                 {
-                    string fp = WindowContext.GetContextFingerprint();
                     var entry = _inputBuffer.MatchHotkey(combo);
                     if (entry != null && WindowContext.MatchesContext(entry.Context, fp))
                     {
                         Log($"  [HOTKEY] {combo} → trigger='{entry.Trigger}' action={entry.Action}");
                         KeyInterceptor.SuppressKey = true;
-
-                        // Activate leader so text triggers with this leader work for 3 sec
-                        _inputBuffer.ActivateLeader(combo);
-
-                        // Fire the hotkey itself if it has an action
-                        if (!string.IsNullOrEmpty(entry.Trigger) || !string.IsNullOrEmpty(entry.Value))
-                            OnTriggerMatched(entry);
+                        OnTriggerMatched(entry);
                         return;
                     }
+                }
+
+                // 2. Leader chord (≥2 held modifiers) + typed rest sequence.
+                //    Keys that continue a sequence are swallowed so the configured
+                //    leader combo overrides any system hotkey.
+                if (mods.Count >= 2)
+                {
+                    string modPrefix = string.Join("+", mods);
+                    bool fired = _inputBuffer.FeedLeaderKey(modPrefix, keyName, fp, out bool swallow);
+                    if (swallow) KeyInterceptor.SuppressKey = true;
+                    if (fired)
+                    {
+                        Log($"  [LEADER] {modPrefix} + '{keyName}' matched");
+                        return;
+                    }
+                    if (swallow) return; // sequence still building — don't feed the text buffer
                 }
             }
         }
@@ -227,9 +239,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         // Feed keystroke to input buffer with full window fingerprint for context matching
         string fingerprint = WindowContext.GetContextFingerprint();
         _inputBuffer.Feed(args, fingerprint);
-
-        // Also check leader triggers (if a leader is active)
-        _inputBuffer.CheckLeaderTriggers(fingerprint);
     }
 
     /// <summary>Called by WinEventHook when foreground window changes.</summary>

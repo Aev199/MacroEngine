@@ -3,27 +3,36 @@ using MacroEngine.Core;
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Modal window that captures a hotkey combo from the user via its own KeyDown/KeyUp —
+/// Modal window that captures a hotkey from the user via its own KeyDown/KeyUp —
 /// does not use the global hook.
 ///
-/// Supported combos:
+/// Normal mode (Шорткат):
 ///   - Ctrl/Alt/Shift + any key: committed when the first modifier is released.
 ///   - Standalone F1–F24: committed immediately on key down.
+///
+/// Leader mode:
+///   - A chord of 2–3 modifiers only (e.g. Ctrl+Alt). Committed once the user
+///     starts releasing the chord. The "rest" of the combination is typed
+///     separately (in the trigger field) while the chord is held.
 /// </summary>
 internal sealed class HotkeyRecorderForm : Form
 {
     private readonly Label _label;
+    private readonly bool _leaderMode;
 
-    // Modifiers held at the moment _mainKey was pressed (defines the combo).
+    // Modifiers held at the moment _mainKey was pressed (defines the combo);
+    // in leader mode this holds the maximal modifier set seen so far.
     private readonly List<string> _capturedMods = new();
     private string _mainKey = "";
 
     public string CapturedCombo { get; private set; } = "";
 
-    public HotkeyRecorderForm()
+    public HotkeyRecorderForm(bool leaderMode = false)
     {
-        Text = "Запись сочетания";
-        Size = new Size(340, 140);
+        _leaderMode = leaderMode;
+
+        Text = leaderMode ? "Запись лидер-аккорда" : "Запись сочетания";
+        Size = new Size(360, 150);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = false;
@@ -54,6 +63,19 @@ internal sealed class HotkeyRecorderForm : Form
         {
             DialogResult = DialogResult.Cancel;
             Close();
+            return;
+        }
+
+        if (_leaderMode)
+        {
+            // Track the maximal modifier set held simultaneously; ignore other keys.
+            var held = CurrentMods();
+            if (held.Count > _capturedMods.Count)
+            {
+                _capturedMods.Clear();
+                _capturedMods.AddRange(held);
+            }
+            UpdateLabel();
             return;
         }
 
@@ -91,6 +113,18 @@ internal sealed class HotkeyRecorderForm : Form
     {
         if (!IsModifierKey(e.KeyCode)) return;
 
+        if (_leaderMode)
+        {
+            // Commit the modifier chord once the user starts releasing it (needs ≥2 mods).
+            if (_capturedMods.Count >= 2)
+            {
+                CapturedCombo = string.Join("+", _capturedMods);
+                DialogResult = DialogResult.OK;
+                Close();
+            }
+            return;
+        }
+
         // A modifier was released — commit if we already have a main key with modifiers.
         if (_mainKey.Length > 0 && _capturedMods.Count > 0)
         {
@@ -102,11 +136,28 @@ internal sealed class HotkeyRecorderForm : Form
 
     // ── Helpers ─────────────────────────────────────────────────────
 
+    private static List<string> CurrentMods()
+    {
+        var held = new List<string>();
+        if ((ModifierKeys & Keys.Control) != 0) held.Add("Ctrl");
+        if ((ModifierKeys & Keys.Alt)     != 0) held.Add("Alt");
+        if ((ModifierKeys & Keys.Shift)   != 0) held.Add("Shift");
+        return held;
+    }
+
     private string BuildCombo() =>
         string.Join("+", _capturedMods.Append(_mainKey));
 
     private void UpdateLabel()
     {
+        if (_leaderMode)
+        {
+            _label.Text = _capturedMods.Count > 0
+                ? string.Join("+", _capturedMods) + (_capturedMods.Count >= 2 ? "   ✓ отпустите" : "+…")
+                : DefaultPrompt();
+            return;
+        }
+
         if (_mainKey.Length > 0 && _capturedMods.Count > 0)
         {
             _label.Text = BuildCombo();
@@ -114,18 +165,15 @@ internal sealed class HotkeyRecorderForm : Form
         }
 
         // Show which modifier keys are currently held.
-        var held = new List<string>();
-        if ((ModifierKeys & Keys.Control) != 0) held.Add("Ctrl");
-        if ((ModifierKeys & Keys.Alt)     != 0) held.Add("Alt");
-        if ((ModifierKeys & Keys.Shift)   != 0) held.Add("Shift");
-
+        var held = CurrentMods();
         _label.Text = held.Count > 0
             ? string.Join("+", held) + "+…"
             : DefaultPrompt();
     }
 
-    private static string DefaultPrompt() =>
-        "Нажмите Ctrl/Alt + клавишу…\nили F1–F12 без модификаторов\n(Esc — отмена)";
+    private string DefaultPrompt() => _leaderMode
+        ? "Зажмите 2–3 модификатора\n(Ctrl / Alt / Shift), затем отпустите\n(Esc — отмена)"
+        : "Нажмите Ctrl/Alt + клавишу…\nили F1–F12 без модификаторов\n(Esc — отмена)";
 
     private static bool IsModifierKey(Keys k) =>
         k is Keys.ControlKey or Keys.LControlKey or Keys.RControlKey
