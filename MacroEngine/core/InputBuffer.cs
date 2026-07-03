@@ -57,6 +57,10 @@ internal sealed class InputBuffer
     /// <summary>Accumulated key-name sequence typed while the leader chord is held.</summary>
     private readonly StringBuilder _leaderSeq = new();
 
+    public string? CurrentLeaderMods => _leaderMods;
+    public string CurrentLeaderSeq => _leaderSeq.ToString();
+    public string LastMatchedLeaderSeq { get; private set; } = "";
+
     public InputBuffer(int maxLength = 64)
     {
         _maxLength = maxLength;
@@ -148,6 +152,7 @@ internal sealed class InputBuffer
             {
                 if (exact != null)
                 {
+                    LastMatchedLeaderSeq = attempt;
                     _leaderMods = null;
                     _leaderSeq.Clear();
                     swallow = true;

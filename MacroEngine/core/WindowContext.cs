@@ -75,23 +75,28 @@ internal static class WindowContext
         // Split by comma, trim whitespace
         var patterns = contextPattern.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+        // Exclusions are checked first — a single "!browser" hit vetoes the match
+        // regardless of where it appears relative to positive patterns like "*".
         foreach (var pattern in patterns)
         {
-            if (string.IsNullOrEmpty(pattern))
-                continue;
-
-            // Exclusion pattern: "!browser" — if matched, the trigger is disabled
             if (pattern.StartsWith('!'))
             {
                 string exclude = pattern[1..].Trim();
                 if (!string.IsNullOrEmpty(exclude) && fingerprint.Contains(exclude, StringComparison.OrdinalIgnoreCase))
-                    return false; // Excluded → no match
-                continue;
+                    return false;
             }
+        }
 
-            // Normal pattern: substring match in any part of the fingerprint
+        foreach (var pattern in patterns)
+        {
+            if (string.IsNullOrEmpty(pattern) || pattern.StartsWith('!'))
+                continue;
+
+            if (pattern == "*")
+                return true;
+
             if (fingerprint.Contains(pattern, StringComparison.OrdinalIgnoreCase))
-                return true; // First match wins (OR logic)
+                return true;
         }
 
         return false;

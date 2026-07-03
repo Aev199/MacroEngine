@@ -83,7 +83,8 @@ internal sealed class SettingsForm : Form
             AutoSize = true,
             ForeColor = Color.Gray,
             Dock = DockStyle.Top,
-            Padding = new Padding(0, 0, 0, 4)
+            Padding = new Padding(0, 0, 0, 4),
+            Visible = false
         };
         _grid = BuildGrid();
         _btnSave = new Button { Text = "💾 Сохранить", Width = 110, Enabled = false };
@@ -204,6 +205,7 @@ internal sealed class SettingsForm : Form
         grid.CellValueChanged            += OnCellValueChanged;
         grid.CurrentCellDirtyStateChanged += OnCurrentCellDirty;
         grid.CellMouseClick              += OnCellMouseClick;
+        grid.CellDoubleClick             += OnCellDoubleClick;
         grid.CellMouseEnter              += OnCellMouseEnter;
         grid.CellMouseLeave              += (_, _) => grid.Cursor = Cursors.Default;
         grid.CellFormatting              += OnCellFormatting;
@@ -229,8 +231,22 @@ internal sealed class SettingsForm : Form
         _btnSave.Click  += OnSave;
         buttons.Controls.AddRange(new Control[] { btnAdd, btnDelete, _btnSave });
 
+        var hintToggle = new LinkLabel
+        {
+            Text = "Справка по синтаксису ▸",
+            AutoSize = true,
+            Dock = DockStyle.Top,
+            Padding = new Padding(0, 2, 0, 2)
+        };
+        hintToggle.LinkClicked += (_, _) =>
+        {
+            _lblHint.Visible = !_lblHint.Visible;
+            hintToggle.Text = _lblHint.Visible ? "Справка по синтаксису ▾" : "Справка по синтаксису ▸";
+        };
+
         tab.Controls.Add(_grid);        // Fill
-        tab.Controls.Add(_lblHint);     // Top
+        tab.Controls.Add(_lblHint);     // Top (hidden by default)
+        tab.Controls.Add(hintToggle);   // Top
         tab.Controls.Add(_filterPanel); // Top
         tab.Controls.Add(buttons);      // Bottom
     }
@@ -585,6 +601,22 @@ internal sealed class SettingsForm : Form
         _grid.Cursor = type != "Текст" ? Cursors.Hand : Cursors.Default;
     }
 
+    private void OnCellDoubleClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || _grid.Columns[e.ColumnIndex].Name != ColValue) return;
+        var row = _grid.Rows[e.RowIndex];
+        if ((row.Cells[ColAction].Value?.ToString() ?? "text") == "macro") return;
+
+        string current = row.Cells[ColValue].Value?.ToString() ?? "";
+        string trigger = row.Cells[ColTrigger].Value?.ToString() ?? "?";
+        using var editor = new ValueEditorForm(current, trigger);
+        if (editor.ShowDialog(this) == DialogResult.OK)
+        {
+            row.Cells[ColValue].Value = editor.Value;
+            MarkDirty();
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════
     //  Trigger add / delete
     // ═══════════════════════════════════════════════════════════════
@@ -683,6 +715,37 @@ internal sealed class SettingsForm : Form
                 Context = context,
                 Action  = action
             });
+        }
+
+        // ── Conflict detection ────────────────────────────────────
+        var conflicts = new List<string>();
+        for (int i = 0; i < list.Count; i++)
+        {
+            for (int j = i + 1; j < list.Count; j++)
+            {
+                var a = list[i]; var b = list[j];
+                if (a.Trigger.Length > 0 && a.Trigger == b.Trigger
+                    && string.IsNullOrEmpty(a.Hotkey) && string.IsNullOrEmpty(b.Hotkey)
+                    && string.IsNullOrEmpty(a.Leader) && string.IsNullOrEmpty(b.Leader)
+                    && ContextsOverlap(a.Context, b.Context))
+                    conflicts.Add($"Строки {i + 1} и {j + 1}: триггер «{a.Trigger}»");
+
+                if (!string.IsNullOrEmpty(a.Hotkey) && !string.IsNullOrEmpty(b.Hotkey)
+                    && string.Equals(a.Hotkey, b.Hotkey, StringComparison.OrdinalIgnoreCase)
+                    && ContextsOverlap(a.Context, b.Context))
+                    conflicts.Add($"Строки {i + 1} и {j + 1}: шорткат «{a.Hotkey}»");
+
+                if (!string.IsNullOrEmpty(a.Leader) && !string.IsNullOrEmpty(b.Leader)
+                    && string.Equals(a.Leader, b.Leader, StringComparison.OrdinalIgnoreCase)
+                    && a.Trigger == b.Trigger
+                    && ContextsOverlap(a.Context, b.Context))
+                    conflicts.Add($"Строки {i + 1} и {j + 1}: лидер «{a.Leader}+{a.Trigger}»");
+            }
+        }
+        if (conflicts.Count > 0)
+        {
+            MessageBox.Show("Обнаружены возможные конфликты:\n\n" + string.Join("\n", conflicts),
+                "MacroEngine — Предупреждение", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         _config.Save(list);
@@ -858,6 +921,14 @@ internal sealed class SettingsForm : Form
     {
         _macroDirty = true;
         _macroBtnSave.Enabled = true;
+    }
+
+    private static bool ContextsOverlap(string a, string b)
+    {
+        var pa = a.Split(',', StringSplitOptions.TrimEntries).Where(s => !s.StartsWith('!')).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var pb = b.Split(',', StringSplitOptions.TrimEntries).Where(s => !s.StartsWith('!')).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (pa.Contains("*") || pb.Contains("*")) return true;
+        return pa.Overlaps(pb);
     }
 
     // ═══════════════════════════════════════════════════════════════
