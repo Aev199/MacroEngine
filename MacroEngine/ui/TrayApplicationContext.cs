@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MacroEngine.Core;
 using MacroEngine.Modules;
 using System.Windows.Forms;
@@ -327,6 +328,46 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 RunOnStaThread(() => MacroRunner.Run(script, eraseLen));
                 break;
             }
+
+            case "open":
+                RunOnStaThread(() =>
+                {
+                    KeyInterceptor.IsSuppressed = true;
+                    try
+                    {
+                        TextExpander.EraseChars(eraseLen);
+                        string path = TextExpander.ResolveTokens(entry.Value).Trim();
+                        Process.Start("explorer.exe", path);
+                    }
+                    finally { KeyInterceptor.IsSuppressed = false; }
+                });
+                break;
+
+            case "launch":
+                RunOnStaThread(() =>
+                {
+                    KeyInterceptor.IsSuppressed = true;
+                    try
+                    {
+                        TextExpander.EraseChars(eraseLen);
+                        string cmd = TextExpander.ResolveTokens(entry.Value).Trim();
+                        var psi = new ProcessStartInfo { UseShellExecute = true };
+                        if (cmd.StartsWith('"'))
+                        {
+                            int end = cmd.IndexOf('"', 1);
+                            psi.FileName = end > 0 ? cmd[1..end] : cmd.Trim('"');
+                            if (end > 0 && end + 1 < cmd.Length)
+                                psi.Arguments = cmd[(end + 1)..].TrimStart();
+                        }
+                        else
+                        {
+                            psi.FileName = cmd;
+                        }
+                        Process.Start(psi);
+                    }
+                    finally { KeyInterceptor.IsSuppressed = false; }
+                });
+                break;
 
             case "text":
             default:

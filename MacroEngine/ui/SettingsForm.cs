@@ -79,7 +79,9 @@ internal sealed class SettingsForm : Form
                    "Лидер — удерживаемый аккорд (Ctrl/Alt) + клавиши «остатка» из поля «Триггер» (напр. gm). " +
                    "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере. " +
                    "Токены: {date} {time} {datetime:HH:mm} {clipboard} {input:подпись} {choice:a|b|c} {cursor}. " +
-                   "Действие «macro»: выберите макрос из списка (создаются на вкладке «Макросы»).",
+                   "Действие «macro»: выберите макрос из списка (создаются на вкладке «Макросы»). " +
+                   "Действие «open»: открывает папку/файл в проводнике. " +
+                   "Действие «launch»: запускает приложение (путь с пробелами — в кавычках: \"путь\" аргументы).",
             AutoSize = true,
             ForeColor = Color.Gray,
             Dock = DockStyle.Top,
@@ -198,7 +200,7 @@ internal sealed class SettingsForm : Form
             HeaderText = "Действие",
             FillWeight = 11,
             MinimumWidth = 70,
-            DataSource = new[] { "text", "richtext", "script", "lisp", "macro" },
+            DataSource = new[] { "text", "richtext", "script", "lisp", "macro", "open", "launch" },
             FlatStyle = FlatStyle.Flat
         });
 

@@ -121,7 +121,7 @@ internal static class TextExpander
     //  Dynamic tokens: {date} {time} {clipboard} {year} {datetime}
     // ═══════════════════════════════════════════════════════════════
 
-    private static string ResolveTokens(string text)
+    internal static string ResolveTokens(string text)
     {
         // Custom date/time format: {datetime:HH:mm} or {datetime:yyyy-MM-dd}
         text = Regex.Replace(text, @"\{datetime:([^}]*)\}", m =>
@@ -155,6 +155,19 @@ internal static class TextExpander
         });
 
         return text;
+    }
+
+    /// <summary>Erase characters by sending Backspace keys. Caller manages IsSuppressed.</summary>
+    public static void EraseChars(int count)
+    {
+        if (count <= 0) return;
+        Thread.Sleep(60);
+        for (int i = 0; i < count; i++)
+        {
+            SendKeyDownUp(VK_BACK);
+            Thread.Sleep(15);
+        }
+        Thread.Sleep(30);
     }
 
     /// <summary>
