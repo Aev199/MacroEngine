@@ -1,42 +1,48 @@
 using System.Diagnostics;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using MacroEngine.Core;
 using MacroEngine.Modules;
-using System.Windows.Forms;
 
 namespace MacroEngine.UI;
 
 /// <summary>
-/// System tray application context.
-/// Provides the tray icon with Start/Stop/Reload/Quit menu
-/// and coordinates the keyboard hook + input buffer + text expansion lifecycle.
+/// Tray-resident application controller.
+/// Owns the tray icon with Start/Stop/Reload/Settings/Quit menu and
+/// coordinates the keyboard hook + input buffer + text expansion lifecycle.
 /// </summary>
-internal sealed class TrayApplicationContext : ApplicationContext
+internal sealed class AppController : IDisposable
 {
-    private readonly NotifyIcon _trayIcon;
-    private readonly ToolStripMenuItem _startStopItem;
-    private readonly ToolStripMenuItem _statusItem;
+    private readonly IClassicDesktopStyleApplicationLifetime _lifetime;
+    private readonly TrayIcon _trayIcon;
+    private readonly NativeMenuItem _startStopItem;
+    private readonly NativeMenuItem _statusItem;
+    private readonly NativeMenuItem _autostartItem;
 
     private readonly KeyInterceptor _interceptor;
     private readonly InputBuffer _inputBuffer;
     private readonly TriggerConfig _config;
     private readonly MacroLibrary _macros;
-    private readonly string _configPath;
-    private readonly string _macrosPath;
-    private readonly LeaderOverlayForm _leaderOverlay;
+    private readonly OverlayWindow _overlay;
+
+    private SettingsWindow? _settingsWindow;
 
     private bool _isRunning;
     private uint _lastForegroundProcessId;
-    private volatile bool _suppressBalloon;
+    private volatile bool _suppressToast;
     private IntPtr _foregroundHook = IntPtr.Zero;
     private NativeMethods.WinEventProc? _foregroundHookProc; // Keep delegate alive
 
-    public TrayApplicationContext()
+    public AppController(IClassicDesktopStyleApplicationLifetime lifetime)
     {
-        // ── Config & log paths ──────────────────────────────────
-        _configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "triggers.json");
-        _macrosPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "macros.json");
-        _config = new TriggerConfig(_configPath);
-        _macros = new MacroLibrary(_macrosPath);
+        _lifetime = lifetime;
+
+        // ── Config ───────────────────────────────────────────────
+        string configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "triggers.json");
+        string macrosPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "macros.json");
+        _config = new TriggerConfig(configPath);
+        _macros = new MacroLibrary(macrosPath);
 
         Log("=== MacroEngine started ===");
 
@@ -44,77 +50,73 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _interceptor = new KeyInterceptor();
         _inputBuffer = new InputBuffer(maxLength: 64);
 
-        // Wire up: key press → buffer → trigger detection → expansion
         _interceptor.KeyPressed += OnKeyPressed;
         _inputBuffer.TriggerMatched += OnTriggerMatched;
         _config.ConfigChanged += OnConfigChanged;
 
-        // ── Load initial triggers ────────────────────────────────
         var triggers = _config.Load();
         _inputBuffer.LoadTriggers(triggers);
         _config.StartWatching();
 
-        // ── Load named macros ────────────────────────────────────
         _macros.Load();
         _macros.StartWatching();
 
-        // ── System Tray Icon ─────────────────────────────────────
-        _trayIcon = new NotifyIcon
+        // ── Tray icon & menu ─────────────────────────────────────
+        _statusItem = new NativeMenuItem("Статус: остановлен") { IsEnabled = false };
+        _startStopItem = new NativeMenuItem("Запустить");
+        _startStopItem.Click += (_, _) => { if (_isRunning) StopEngine(); else StartEngine(); };
+
+        var reloadItem = new NativeMenuItem("Перезагрузить конфиг");
+        reloadItem.Click += (_, _) => ReloadConfig();
+
+        var settingsItem = new NativeMenuItem("Настройки…");
+        settingsItem.Click += (_, _) => OpenSettings();
+
+        _autostartItem = new NativeMenuItem("Автозапуск при входе в Windows")
+        {
+            ToggleType = NativeMenuItemToggleType.CheckBox,
+            IsChecked = Autostart.IsEnabled()
+        };
+        _autostartItem.Click += (_, _) => ToggleAutostart();
+
+        var quitItem = new NativeMenuItem("Выход");
+        quitItem.Click += (_, _) => Quit();
+
+        _trayIcon = new TrayIcon
         {
             Icon = AppIcon.Get(),
-            Text = "MacroEngine — остановлен",
-            Visible = true
+            ToolTipText = "MacroEngine — остановлен",
+            Menu = new NativeMenu
+            {
+                Items =
+                {
+                    _statusItem,
+                    new NativeMenuItemSeparator(),
+                    _startStopItem,
+                    reloadItem,
+                    settingsItem,
+                    new NativeMenuItemSeparator(),
+                    _autostartItem,
+                    new NativeMenuItemSeparator(),
+                    quitItem
+                }
+            }
         };
+        _trayIcon.Clicked += (_, _) => OpenSettings();
+        TrayIcon.SetIcons(Application.Current!, new TrayIcons { _trayIcon });
 
-        // Context menu
-        var menu = new ContextMenuStrip();
-
-        _statusItem = new ToolStripMenuItem("Статус: остановлен")
-        {
-            Enabled = false
-        };
-        menu.Items.Add(_statusItem);
-        menu.Items.Add(new ToolStripSeparator());
-
-        _startStopItem = new ToolStripMenuItem("Запустить", null, OnStartStop);
-        menu.Items.Add(_startStopItem);
-
-        var reloadItem = new ToolStripMenuItem("Перезагрузить конфиг", null, OnReloadConfig);
-        menu.Items.Add(reloadItem);
-
-        var settingsItem = new ToolStripMenuItem("Настройки...", null, OnOpenSettings);
-        menu.Items.Add(settingsItem);
-
-        menu.Items.Add(new ToolStripSeparator());
-
-        var autostartItem = new ToolStripMenuItem("Автозапуск при входе в Windows", null, OnToggleAutostart)
-        {
-            CheckOnClick = true,
-            Checked = Autostart.IsEnabled()
-        };
-        menu.Items.Add(autostartItem);
-
-        menu.Items.Add(new ToolStripSeparator());
-
-        var quitItem = new ToolStripMenuItem("Выход", null, OnQuit);
-        menu.Items.Add(quitItem);
-
-        _trayIcon.ContextMenuStrip = menu;
-
-        // ── Leader overlay ───────────────────────────────────────
-        _leaderOverlay = new LeaderOverlayForm();
+        // ── Overlay HUD ──────────────────────────────────────────
+        _overlay = new OverlayWindow();
 
         // ── Start automatically ──────────────────────────────────
         StartEngine();
 
-        // ── First-run balloon ────────────────────────────────────
+        // ── First-run toast ──────────────────────────────────────
         string firstRunPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".firstrun");
         if (!File.Exists(firstRunPath))
         {
             try { File.WriteAllText(firstRunPath, ""); } catch { }
-            _trayIcon.ShowBalloonTip(5000, "MacroEngine",
-                "MacroEngine запущен! Правый клик по иконке в трее → Настройки.",
-                ToolTipIcon.Info);
+            _overlay.ShowToast("MacroEngine запущен — правый клик по иконке в трее", 5000);
         }
     }
 
@@ -140,7 +142,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 0, 0,
                 NativeMethods.WINEVENT_OUTOFCONTEXT);
 
-            // Initialize with current foreground process
             IntPtr hWnd = NativeMethods.GetForegroundWindow();
             NativeMethods.GetWindowThreadProcessId(hWnd, out _lastForegroundProcessId);
 
@@ -151,11 +152,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         catch (Exception ex)
         {
             Log($"Engine START FAILED: {ex.Message}");
-            MessageBox.Show(
-                $"Не удалось запустить перехват клавиатуры:\n{ex.Message}",
-                "MacroEngine — Ошибка",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            _overlay.ShowToast($"Ошибка запуска перехвата: {ex.Message}", 6000);
         }
     }
 
@@ -176,18 +173,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateUI()
     {
-        if (_isRunning)
-        {
-            _trayIcon.Text = "MacroEngine — активен";
-            _statusItem.Text = "Статус: активен";
-            _startStopItem.Text = "Остановить";
-        }
-        else
-        {
-            _trayIcon.Text = "MacroEngine — остановлен";
-            _statusItem.Text = "Статус: остановлен";
-            _startStopItem.Text = "Запустить";
-        }
+        string status = _isRunning ? "активен" : "остановлен";
+        _trayIcon.ToolTipText = $"MacroEngine — {status}";
+        _statusItem.Header = $"Статус: {status}";
+        _startStopItem.Header = _isRunning ? "Остановить" : "Запустить";
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -197,8 +186,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void OnKeyPressed(KeyEventData args)
     {
         if (!_isRunning) return;
-
-        // Skip suppressed events (during our own expansion)
         if (KeyInterceptor.IsSuppressed) return;
 
         // ── Hotkey / leader detection ─────────────────────────────
@@ -221,7 +208,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                     ? string.Join("+", mods) + "+" + keyName
                     : keyName;
 
-                if (!IsSystemHotkey(combo))
+                if (!SystemHotkeys.IsSystem(combo))
                 {
                     var entry = _inputBuffer.MatchHotkey(combo);
                     if (entry != null && WindowContext.MatchesContext(entry.Context, fp))
@@ -238,10 +225,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 //    them; let the OS handle the keystroke and abort any sequence.
                 if (mods.Count >= 2)
                 {
-                    if (IsSystemHotkey(combo))
+                    if (SystemHotkeys.IsSystem(combo))
                     {
                         _inputBuffer.ResetLeader();
-                        _leaderOverlay.HideOverlay();
+                        _overlay.HideOverlay();
                     }
                     else
                     {
@@ -250,16 +237,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
                         if (swallow) KeyInterceptor.SuppressKey = true;
                         if (fired)
                         {
-                            _leaderOverlay.ShowMatched(modPrefix, _inputBuffer.LastMatchedLeaderSeq);
+                            _overlay.ShowMatched(modPrefix, _inputBuffer.LastMatchedLeaderSeq);
                             Log($"  [LEADER] {modPrefix} + '{keyName}' matched");
                             return;
                         }
                         if (swallow)
                         {
-                            _leaderOverlay.ShowLeader(modPrefix, _inputBuffer.CurrentLeaderSeq);
+                            _overlay.ShowLeader(modPrefix, _inputBuffer.CurrentLeaderSeq);
                             return;
                         }
-                        _leaderOverlay.HideOverlay();
+                        _overlay.HideOverlay();
                     }
                 }
             }
@@ -390,112 +377,78 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void OnConfigChanged(List<TriggerEntry> newTriggers)
     {
+        // Fired from the FileSystemWatcher thread — marshal UI work.
         _inputBuffer.LoadTriggers(newTriggers);
-        System.Diagnostics.Debug.WriteLine("[TrayApp] Config reloaded");
-
-        if (!_suppressBalloon)
-        {
-            _trayIcon.ShowBalloonTip(
-                2000,
-                "MacroEngine",
-                $"Конфиг перезагружен. Триггеров: {newTriggers.Count}",
-                ToolTipIcon.Info);
-        }
+        if (!_suppressToast)
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                _overlay.ShowToast($"Конфиг перезагружен. Триггеров: {newTriggers.Count}"));
     }
 
     // ═══════════════════════════════════════════════════════════════
     //  Menu Handlers
     // ═══════════════════════════════════════════════════════════════
 
-    private void OnStartStop(object? sender, EventArgs e)
+    private void ReloadConfig()
     {
-        if (_isRunning)
-            StopEngine();
-        else
-            StartEngine();
+        var triggers = _config.Load();
+        _inputBuffer.LoadTriggers(triggers);
+        _overlay.ShowToast($"Конфиг перезагружен вручную. Триггеров: {triggers.Count}");
     }
 
-    private void OnToggleAutostart(object? sender, EventArgs e)
+    private void ToggleAutostart()
     {
-        if (sender is not ToolStripMenuItem item) return;
         try
         {
-            Autostart.SetEnabled(item.Checked);
-            Log($"Autostart {(item.Checked ? "enabled" : "disabled")}");
+            bool enable = !Autostart.IsEnabled();
+            Autostart.SetEnabled(enable);
+            _autostartItem.IsChecked = enable;
+            Log($"Autostart {(enable ? "enabled" : "disabled")}");
         }
         catch (Exception ex)
         {
             Log($"Autostart toggle failed: {ex.Message}");
-            item.Checked = Autostart.IsEnabled();
-            MessageBox.Show($"Не удалось изменить автозапуск:\n{ex.Message}",
-                "MacroEngine", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _autostartItem.IsChecked = Autostart.IsEnabled();
+            _overlay.ShowToast($"Не удалось изменить автозапуск: {ex.Message}", 5000);
         }
     }
 
-    private void OnReloadConfig(object? sender, EventArgs e)
+    private void OpenSettings()
     {
-        var triggers = _config.Load();
-        _inputBuffer.LoadTriggers(triggers);
-        _trayIcon.ShowBalloonTip(
-            2000,
-            "MacroEngine",
-            $"Конфиг перезагружен вручную. Триггеров: {triggers.Count}",
-            ToolTipIcon.Info);
+        if (_settingsWindow != null)
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        // Suppress toast from the file watcher — the settings window saves directly.
+        _suppressToast = true;
+        _settingsWindow = new SettingsWindow(_config, _macros);
+        _settingsWindow.Closed += (_, _) =>
+        {
+            _settingsWindow = null;
+            _macros.Load(); // pick up macro edits made in the window
+            _suppressToast = false;
+        };
+        _settingsWindow.Show();
     }
 
-    private void OnOpenSettings(object? sender, EventArgs e)
-    {
-        // Suppress balloon tip from file watcher — settings form shows its own confirmation.
-        _suppressBalloon = true;
-        try
-        {
-            using var form = new SettingsForm(_config, _macros);
-            form.ShowDialog();
-            // Pick up any macro edits made in the form.
-            _macros.Load();
-        }
-        finally
-        {
-            _suppressBalloon = false;
-        }
-    }
-
-    private void OnQuit(object? sender, EventArgs e)
+    private void Quit()
     {
         Log("=== MacroEngine shutting down ===");
-        StopEngine();
-        _trayIcon.Visible = false;
-        _trayIcon.Dispose();
-        _leaderOverlay.Dispose();
-        _config.Dispose();
-        _macros.Dispose();
-        _interceptor.Dispose();
-        Application.Exit();
+        Dispose();
+        _lifetime.Shutdown();
     }
-
-    private static bool IsSystemHotkey(string combo) => SystemHotkeys.IsSystem(combo);
-
-    // ═══════════════════════════════════════════════════════════════
-    //  Logging
-    // ═══════════════════════════════════════════════════════════════
 
     private static void Log(string message) => AppLog.Write(message);
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Cleanup
-    // ═══════════════════════════════════════════════════════════════
-
-    protected override void Dispose(bool disposing)
+    public void Dispose()
     {
-        if (disposing)
-        {
-            StopEngine();
-            _trayIcon?.Dispose();
-            _leaderOverlay?.Dispose();
-            _config?.Dispose();
-            _macros?.Dispose();
-            _interceptor?.Dispose();
-        }
-        base.Dispose(disposing);
+        StopEngine();
+        _trayIcon.IsVisible = false;
+        _trayIcon.Dispose();
+        _overlay.Close();
+        _config.Dispose();
+        _macros.Dispose();
+        _interceptor.Dispose();
     }
 }

@@ -143,7 +143,7 @@ internal static class TextExpander
             string label = m.Groups[1].Success && m.Groups[1].Value.Length > 0
                 ? m.Groups[1].Value
                 : "Введите значение:";
-            return PromptForm.AskText(label);
+            return PromptWindow.AskText(label);
         });
 
         // {choice:a|b|c} — let the user pick one option.
@@ -151,7 +151,7 @@ internal static class TextExpander
         {
             var opts = m.Groups[1].Value.Split('|',
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            return opts.Length > 0 ? PromptForm.AskChoice("Выберите:", opts) : "";
+            return opts.Length > 0 ? PromptWindow.AskChoice("Выберите:", opts) : "";
         });
 
         return text;
