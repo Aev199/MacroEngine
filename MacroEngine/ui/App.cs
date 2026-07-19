@@ -15,6 +15,7 @@ namespace MacroEngine.UI;
 internal sealed class App : Application
 {
     private AppController? _controller;
+    private SupportUiController? _supportUi;
 
     public override void Initialize()
     {
@@ -42,6 +43,7 @@ internal sealed class App : Application
         {
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
             _controller = new AppController(desktop);
+            _supportUi = new SupportUiController();
         }
 
         base.OnFrameworkInitializationCompleted();
