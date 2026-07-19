@@ -39,10 +39,15 @@ internal static class ShellTools
 
     private static void Open(string target)
     {
-        Process.Start(new ProcessStartInfo
+        Process? process = Process.Start(new ProcessStartInfo
         {
             FileName = target,
             UseShellExecute = true
-        }) ?? throw new InvalidOperationException($"Windows не смогла открыть '{target}'.");
+        });
+
+        if (process == null)
+            throw new InvalidOperationException($"Windows не смогла открыть '{target}'.");
+
+        process.Dispose();
     }
 }
