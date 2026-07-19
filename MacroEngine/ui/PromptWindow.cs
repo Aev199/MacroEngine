@@ -97,7 +97,13 @@ internal sealed class PromptWindow : Window
         };
 
         _cancellationRegistration = cancellationToken.Register(() =>
-            Dispatcher.UIThread.Post(() => CancelFromToken(cancellationToken)));
+        {
+            // Release the worker immediately. Closing the Avalonia window is
+            // posted separately so application shutdown cannot deadlock while
+            // the UI thread is joining the worker.
+            _result.TrySetCanceled(cancellationToken);
+            Dispatcher.UIThread.Post(CloseAfterCancellation);
+        });
 
         ResetCountdown();
         _countdown.Start();
@@ -129,14 +135,13 @@ internal sealed class PromptWindow : Window
         Close();
     }
 
-    private void CancelFromToken(CancellationToken cancellationToken)
+    private void CloseAfterCancellation()
     {
         if (_completed) return;
 
         _completed = true;
         _countdown.Stop();
         _cancellationRegistration.Dispose();
-        _result.TrySetCanceled(cancellationToken);
         Close();
     }
 
