@@ -24,6 +24,7 @@ internal static class AppPaths
     public static string MacrosFile { get; } = Path.Combine(ConfigDirectory, "macros.json");
     public static string LogFile { get; } = Path.Combine(LogDirectory, "macroengine.log");
     public static string FirstRunMarker { get; } = Path.Combine(StateDirectory, ".firstrun");
+    public static string HelpFirstRunMarker { get; } = Path.Combine(StateDirectory, ".help-shown-v1");
     public static string DiagnosticMarker { get; } = Path.Combine(StateDirectory, "diagnostic.logging");
 
     public static bool IsPortable => Portable;
