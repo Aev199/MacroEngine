@@ -1,115 +1,108 @@
 using System.Diagnostics;
 using System.Text;
+using MacroEngine.Core;
 
 namespace MacroEngine.Modules;
 
-/// <summary>
-/// Executes external scripts and commands triggered by action="script".
-/// </summary>
+/// <summary>Executes external scripts and commands triggered by action="script".</summary>
 internal static class ScriptRunner
 {
-    /// <summary>
-    /// Run a command string. Supports:
-    ///   python C:\scripts\myscript.py
-    ///   C:\tools\backup.bat
-    ///   powershell -File C:\scripts\deploy.ps1
-    ///   notepad.exe
-    /// 
-    /// Tokens {date} etc. are already resolved before calling this method.
-    /// </summary>
-    public static void Run(string command, string triggerName)
+    public static void Run(
+        string command,
+        string triggerName,
+        CancellationToken cancellationToken = default)
     {
-        try
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string fileName;
+        string arguments;
+        SplitCommand(command, out fileName, out arguments);
+
+        var psi = new ProcessStartInfo
         {
-            // Split command into file name and arguments
-            string fileName;
-            string arguments;
+            FileName = fileName,
+            Arguments = arguments,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = Path.GetDirectoryName(fileName) ?? ""
+        };
 
-            if (command.StartsWith('"'))
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("The script process could not be started.");
+
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderr.AppendLine(e.Data); };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!process.WaitForExit(100))
+        {
+            if (cancellationToken.IsCancellationRequested)
             {
-                // Quoted path: "C:\Program Files\app.exe" args
-                int endQuote = command.IndexOf('"', 1);
-                if (endQuote > 1)
-                {
-                    fileName = command[1..endQuote];
-                    arguments = command[(endQuote + 1)..].Trim();
-                }
-                else
-                {
-                    fileName = command;
-                    arguments = "";
-                }
-            }
-            else
-            {
-                int spaceIdx = command.IndexOf(' ');
-                if (spaceIdx > 0)
-                {
-                    fileName = command[..spaceIdx];
-                    arguments = command[(spaceIdx + 1)..].Trim();
-                }
-                else
-                {
-                    fileName = command;
-                    arguments = "";
-                }
+                KillProcess(process);
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
-            var psi = new ProcessStartInfo
+            if (DateTime.UtcNow >= deadline)
             {
-                FileName = fileName,
-                Arguments = arguments,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                WorkingDirectory = Path.GetDirectoryName(fileName) ?? ""
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null)
-            {
-                Log($"[Script] FAILED to start: {command}");
-                return;
-            }
-
-            // Read stdout/stderr asynchronously. Reading after WaitForExit (or with
-            // synchronous ReadToEnd before it) can deadlock when the child fills the
-            // pipe buffer, so drain via events while the process runs.
-            var sbOut = new StringBuilder();
-            var sbErr = new StringBuilder();
-            process.OutputDataReceived += (_, e) => { if (e.Data != null) sbOut.AppendLine(e.Data); };
-            process.ErrorDataReceived  += (_, e) => { if (e.Data != null) sbErr.AppendLine(e.Data); };
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            if (!process.WaitForExit(30_000)) // 30 second timeout
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                Log($"[Script] TIMEOUT [{triggerName}] killed after 30s: {command}");
-                return;
-            }
-            process.WaitForExit(); // let async readers flush remaining output
-
-            string stdout = sbOut.ToString().Trim();
-            string stderr = sbErr.ToString().Trim();
-
-            if (process.ExitCode == 0)
-            {
-                Log($"[Script] OK [{triggerName}] exit=0 {(stdout.Length > 0 ? "out=" + Truncate(stdout, 200) : "")}");
-            }
-            else
-            {
-                Log($"[Script] ERROR [{triggerName}] exit={process.ExitCode} {(stderr.Length > 0 ? "err=" + Truncate(stderr, 200) : "")}");
+                KillProcess(process);
+                throw new TimeoutException("Script execution exceeded 30 seconds.");
             }
         }
-        catch (Exception ex)
+
+        process.WaitForExit(); // allow asynchronous output readers to flush
+
+        AppLog.Write($"Script completed with exit code {process.ExitCode}");
+        if (stdout.Length > 0)
+            AppLog.Diagnostic("Script stdout: " + Truncate(stdout.ToString().Trim(), 500));
+        if (stderr.Length > 0)
+            AppLog.Diagnostic("Script stderr: " + Truncate(stderr.ToString().Trim(), 500));
+
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"Script exited with code {process.ExitCode}.");
+    }
+
+    internal static void SplitCommand(string command, out string fileName, out string arguments)
+    {
+        if (command.StartsWith('"'))
         {
-            Log($"[Script] EXCEPTION [{triggerName}]: {ex.Message}");
+            int endQuote = command.IndexOf('"', 1);
+            if (endQuote > 1)
+            {
+                fileName = command[1..endQuote];
+                arguments = command[(endQuote + 1)..].Trim();
+                return;
+            }
+        }
+
+        int spaceIndex = command.IndexOf(' ');
+        if (spaceIndex > 0)
+        {
+            fileName = command[..spaceIndex];
+            arguments = command[(spaceIndex + 1)..].Trim();
+        }
+        else
+        {
+            fileName = command.Trim('"');
+            arguments = "";
         }
     }
 
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "...";
+    private static void KillProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch { }
+    }
 
-    private static void Log(string message) => Core.AppLog.Write(message);
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max] + "…";
 }
