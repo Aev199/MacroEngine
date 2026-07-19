@@ -17,6 +17,7 @@ internal sealed class ExecutionQueue : IDisposable
     private readonly object _currentLock = new();
 
     private CancellationTokenSource? _currentCancellation;
+    private int _cancelBeforeStart;
     private int _reserved;
     private bool _disposed;
 
@@ -60,14 +61,17 @@ internal sealed class ExecutionQueue : IDisposable
         return false;
     }
 
-    /// <summary>Cancel the running job and discard a job that has not started.</summary>
+    /// <summary>Cancel the running job or prevent a dequeued job from starting.</summary>
     public void CancelAll()
     {
         bool hasRunningJob;
         lock (_currentLock)
         {
             hasRunningJob = _currentCancellation != null;
-            _currentCancellation?.Cancel();
+            if (hasRunningJob)
+                _currentCancellation!.Cancel();
+            else if (Volatile.Read(ref _reserved) != 0)
+                Interlocked.Exchange(ref _cancelBeforeStart, 1);
         }
 
         bool removedPending = false;
@@ -75,7 +79,10 @@ internal sealed class ExecutionQueue : IDisposable
             removedPending = true;
 
         if (removedPending && !hasRunningJob)
+        {
+            Interlocked.Exchange(ref _cancelBeforeStart, 0);
             Interlocked.Exchange(ref _reserved, 0);
+        }
     }
 
     private void WorkerLoop()
@@ -86,8 +93,12 @@ internal sealed class ExecutionQueue : IDisposable
             lock (_currentLock)
                 _currentCancellation = cancellation;
 
+            if (Interlocked.Exchange(ref _cancelBeforeStart, 0) != 0)
+                cancellation.Cancel();
+
             try
             {
+                cancellation.Token.ThrowIfCancellationRequested();
                 JobStarted?.Invoke(job.Description);
                 job.Action(cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();
@@ -95,7 +106,8 @@ internal sealed class ExecutionQueue : IDisposable
             }
             catch (OperationCanceledException ex)
             {
-                JobCancelled?.Invoke(job.Description, ex.Message);
+                string? reason = cancellation.IsCancellationRequested ? null : ex.Message;
+                JobCancelled?.Invoke(job.Description, reason);
             }
             catch (Exception ex)
             {
