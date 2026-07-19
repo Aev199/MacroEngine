@@ -142,12 +142,14 @@ internal sealed class AppController : IDisposable
                 UpdateUI();
             });
 
-        _executionQueue.JobCancelled += _ =>
+        _executionQueue.JobCancelled += (_, reason) =>
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 _cancelItem.IsEnabled = false;
                 UpdateUI();
-                _overlay.ShowToast("Текущее действие остановлено");
+                _overlay.ShowToast(
+                    string.IsNullOrWhiteSpace(reason) ? "Текущее действие остановлено" : reason,
+                    5000);
             });
 
         _executionQueue.JobFailed += (description, ex) =>
