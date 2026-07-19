@@ -59,14 +59,25 @@ internal static class AtomicJsonFile
         try
         {
             value = LoadStable<T>(backup, attempts: 2, delayMilliseconds: 50);
-            WriteValidated(path, value, updateBackup: false);
-            return true;
         }
         catch
         {
             value = default!;
             return false;
         }
+
+        try
+        {
+            WriteValidated(path, value, updateBackup: false);
+        }
+        catch (Exception ex)
+        {
+            // The in-memory recovery is still valid and safer than returning an
+            // empty configuration merely because the damaged file is read-only.
+            AppLog.Write($"Recovered JSON could not be written back: {ex.GetType().Name}: {ex.Message}");
+        }
+
+        return true;
     }
 
     public static void Save<T>(string path, T value) =>
