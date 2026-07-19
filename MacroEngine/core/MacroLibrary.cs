@@ -40,7 +40,7 @@ internal sealed class MacroLibrary : IDisposable
 
         try
         {
-            var list = AtomicJsonFile.Load<List<MacroDef>>(_path);
+            var list = AtomicJsonFile.LoadStable<List<MacroDef>>(_path);
             Index(list);
             return list;
         }
@@ -48,15 +48,10 @@ internal sealed class MacroLibrary : IDisposable
         {
             AppLog.Write($"Macro library load failed: {ex.GetType().Name}: {ex.Message}");
 
-            if (AtomicJsonFile.TryLoadBackup<List<MacroDef>>(_path, out var backup))
+            if (AtomicJsonFile.TryRestoreBackup<List<MacroDef>>(_path, out var backup))
             {
-                AppLog.Write("Macro library recovered from backup");
+                AppLog.Write("Macro library recovered from backup; valid backup preserved");
                 Index(backup);
-                try { AtomicJsonFile.Save(_path, backup); }
-                catch (Exception restoreEx)
-                {
-                    AppLog.Write($"Macro library backup restore failed: {restoreEx.GetType().Name}: {restoreEx.Message}");
-                }
                 return backup;
             }
 
@@ -95,7 +90,7 @@ internal sealed class MacroLibrary : IDisposable
     private void ScheduleReload()
     {
         lock (_reloadLock)
-            _reloadTimer?.Change(180, Timeout.Infinite);
+            _reloadTimer?.Change(350, Timeout.Infinite);
     }
 
     private void ReloadFromWatcher()
