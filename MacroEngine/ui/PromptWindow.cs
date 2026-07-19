@@ -98,9 +98,6 @@ internal sealed class PromptWindow : Window
 
         _cancellationRegistration = cancellationToken.Register(() =>
         {
-            // Release the worker immediately. Closing the Avalonia window is
-            // posted separately so application shutdown cannot deadlock while
-            // the UI thread is joining the worker.
             _result.TrySetCanceled(cancellationToken);
             Dispatcher.UIThread.Post(CloseAfterCancellation);
         });
@@ -164,14 +161,15 @@ internal sealed class PromptWindow : Window
         if (Dispatcher.UIThread.CheckAccess())
             throw new InvalidOperationException("PromptWindow must not block the UI thread.");
 
-        var operation = Dispatcher.UIThread.InvokeAsync(async () =>
+        var createOperation = Dispatcher.UIThread.InvokeAsync(() =>
         {
             var window = new PromptWindow(label, choices, cancellationToken);
             window.Show();
             window.Activate();
-            return await window._result.Task;
+            return window._result.Task;
         });
 
-        return operation.GetAwaiter().GetResult();
+        Task<string> resultTask = createOperation.GetAwaiter().GetResult();
+        return resultTask.GetAwaiter().GetResult();
     }
 }
