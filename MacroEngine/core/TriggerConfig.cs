@@ -30,20 +30,15 @@ internal sealed class TriggerConfig : IDisposable
 
         try
         {
-            return AtomicJsonFile.Load<List<TriggerEntry>>(_configPath);
+            return AtomicJsonFile.LoadStable<List<TriggerEntry>>(_configPath);
         }
         catch (Exception ex)
         {
             AppLog.Write($"Trigger config load failed: {ex.GetType().Name}: {ex.Message}");
 
-            if (AtomicJsonFile.TryLoadBackup<List<TriggerEntry>>(_configPath, out var backup))
+            if (AtomicJsonFile.TryRestoreBackup<List<TriggerEntry>>(_configPath, out var backup))
             {
-                AppLog.Write("Trigger config recovered from backup");
-                try { AtomicJsonFile.Save(_configPath, backup); }
-                catch (Exception restoreEx)
-                {
-                    AppLog.Write($"Trigger config backup restore failed: {restoreEx.GetType().Name}: {restoreEx.Message}");
-                }
+                AppLog.Write("Trigger config recovered from backup; valid backup preserved");
                 return backup;
             }
 
@@ -76,7 +71,7 @@ internal sealed class TriggerConfig : IDisposable
     private void ScheduleReload()
     {
         lock (_reloadLock)
-            _reloadTimer?.Change(180, Timeout.Infinite);
+            _reloadTimer?.Change(350, Timeout.Infinite);
     }
 
     private void ReloadFromWatcher()
