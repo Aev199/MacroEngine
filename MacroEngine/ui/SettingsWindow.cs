@@ -14,11 +14,12 @@ using MacroEngine.Core;
 
 namespace MacroEngine.UI;
 
-/// <summary>One row of the trigger grid (editable view-model over TriggerEntry).</summary>
+/// <summary>Editable view-model for one trigger row.</summary>
 internal sealed class TriggerRow : INotifyPropertyChanged
 {
     public static readonly string[] Types = { "Текст", "Шорткат", "Лидер" };
-    public static readonly string[] Actions = { "text", "richtext", "script", "lisp", "macro", "open", "launch" };
+    public static readonly string[] Actions =
+        { "text", "richtext", "script", "lisp", "macro", "open", "launch" };
 
     private string _type = "Текст";
     private string _trigger = "";
@@ -27,22 +28,68 @@ internal sealed class TriggerRow : INotifyPropertyChanged
     private string _context = "*";
     private string _action = "text";
 
-    public string Type    { get => _type;    set { if (Set(ref _type, value)) { Notify(nameof(TriggerEditable)); Notify(nameof(HotkeyEditable)); Notify(nameof(HotkeyDisplay)); } } }
-    public string Trigger { get => _trigger; set => Set(ref _trigger, value); }
-    public string Hotkey  { get => _hotkey;  set { if (Set(ref _hotkey, value)) Notify(nameof(HotkeyDisplay)); } }
-    public string Value   { get => _value;   set { if (Set(ref _value, value)) Notify(nameof(ValuePreview)); } }
-    public string Context { get => _context; set => Set(ref _context, value); }
-    public string Action  { get => _action;  set => Set(ref _action, value); }
+    public string Type
+    {
+        get => _type;
+        set
+        {
+            if (!Set(ref _type, value)) return;
+            Notify(nameof(TriggerEditable));
+            Notify(nameof(HotkeyEditable));
+            Notify(nameof(HotkeyDisplay));
+        }
+    }
+
+    public string Trigger
+    {
+        get => _trigger;
+        set => Set(ref _trigger, value);
+    }
+
+    public string Hotkey
+    {
+        get => _hotkey;
+        set
+        {
+            if (Set(ref _hotkey, value))
+                Notify(nameof(HotkeyDisplay));
+        }
+    }
+
+    public string Value
+    {
+        get => _value;
+        set
+        {
+            if (Set(ref _value, value))
+                Notify(nameof(ValuePreview));
+        }
+    }
+
+    public string Context
+    {
+        get => _context;
+        set => Set(ref _context, value);
+    }
+
+    public string Action
+    {
+        get => _action;
+        set => Set(ref _action, value);
+    }
 
     public bool TriggerEditable => Type != "Шорткат";
-    public bool HotkeyEditable  => Type != "Текст";
-    public string HotkeyDisplay => !HotkeyEditable ? "—"
+    public bool HotkeyEditable => Type != "Текст";
+
+    public string HotkeyDisplay => !HotkeyEditable
+        ? "—"
         : Hotkey.Length > 0 ? "⌨  " + Hotkey : "⌨  записать…";
+
     public string ValuePreview
     {
         get
         {
-            string oneLine = Value.Replace("\n", " ⏎ ");
+            string oneLine = Value.Replace("\r", "").Replace("\n", " ⏎ ");
             return oneLine.Length > 60 ? oneLine[..60] + "…" : oneLine;
         }
     }
@@ -60,33 +107,32 @@ internal sealed class TriggerRow : INotifyPropertyChanged
     private void Notify(string name) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
-    public static TriggerRow From(TriggerEntry t) => new()
+    public static TriggerRow From(TriggerEntry trigger) => new()
     {
-        Type = !string.IsNullOrWhiteSpace(t.Hotkey) ? "Шорткат"
-             : !string.IsNullOrWhiteSpace(t.Leader) ? "Лидер" : "Текст",
-        Trigger = t.Trigger,
-        Hotkey = t.Hotkey ?? t.Leader ?? "",
-        Value = t.Value,
-        Context = t.Context,
-        Action = t.Action
+        Type = !string.IsNullOrWhiteSpace(trigger.Hotkey) ? "Шорткат"
+            : !string.IsNullOrWhiteSpace(trigger.Leader) ? "Лидер"
+            : "Текст",
+        Trigger = trigger.Trigger,
+        Hotkey = trigger.Hotkey ?? trigger.Leader ?? "",
+        Value = trigger.Value,
+        Context = trigger.Context,
+        Action = trigger.Action
     };
 
     public TriggerEntry ToEntry() => new()
     {
         Trigger = Type == "Шорткат" ? "" : Trigger.Trim(),
-        Hotkey  = Type == "Шорткат" ? Hotkey.Trim() : null,
-        Leader  = Type == "Лидер"   ? Hotkey.Trim() : null,
-        Value   = Value,
-        Context = Context.Trim().Length > 0 ? Context.Trim() : "*",
-        Action  = Action.Trim()
+        Hotkey = Type == "Шорткат" ? Hotkey.Trim() : null,
+        Leader = Type == "Лидер" ? Hotkey.Trim() : null,
+        Value = Value,
+        Context = string.IsNullOrWhiteSpace(Context) ? "*" : Context.Trim(),
+        Action = string.IsNullOrWhiteSpace(Action) ? "text" : Action.Trim()
     };
 }
 
 /// <summary>
-/// Settings window with two tabs:
-///   «Триггеры» — trigger grid (type / trigger / hotkey / value / context / action)
-///                with context filter chips and conflict detection on save;
-///   «Макросы»  — named reusable macros (list + step editor).
+/// Settings window for triggers and named macros. Saving is task-based so the
+/// close guard cannot dismiss the window before validation and persistence finish.
 /// </summary>
 internal sealed class SettingsWindow : Window
 {
@@ -95,23 +141,30 @@ internal sealed class SettingsWindow : Window
     private readonly List<MacroDef> _macroDefs;
 
     private readonly ObservableCollection<TriggerRow> _rows = new();
+    private readonly ObservableCollection<string> _macroNames = new();
+
     private readonly DataGrid _grid;
     private readonly Button _btnSave;
     private readonly WrapPanel _filterPanel;
     private readonly TextBlock _hint;
+    private readonly TextBlock _triggerStatus;
 
     private string _filterContext = "Все";
     private bool _dirty;
     private bool _loading;
 
-    // ── Macro tab ───────────────────────────────────────────────────
     private readonly ListBox _macroList;
     private readonly TextBox _macroName;
     private readonly TextBox _macroSteps;
     private readonly Button _macroBtnSave;
+    private readonly TextBlock _macroStatus;
+
     private int _macroCurrent = -1;
     private bool _macroLoading;
     private bool _macroDirty;
+
+    private bool _closeConfirmed;
+    private bool _closingGuardActive;
 
     public SettingsWindow(TriggerConfig config, MacroLibrary macros)
     {
@@ -127,26 +180,31 @@ internal sealed class SettingsWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Icon = AppIcon.Get();
 
-        // ── Triggers tab controls ─────────────────────────────────
         _filterPanel = new WrapPanel { Orientation = Orientation.Horizontal };
         _hint = new TextBlock
         {
             Text = "Тип: Текст — набранный триггер · Шорткат — прямое сочетание · " +
-                   "Лидер — удерживаемый аккорд (Ctrl/Alt) + клавиши «остатка» из поля «Триггер» (напр. gm).\n" +
-                   "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере (через запятую).\n" +
+                   "Лидер — удерживаемый аккорд (Ctrl/Alt/Shift) + клавиши из поля «Триггер» (например gm).\n" +
+                   "Контекст: * = везде, acad = AutoCAD, !browser = не в браузере; значения разделяются запятыми.\n" +
                    "Токены: {date} {time} {datetime:HH:mm} {clipboard} {input:подпись} {choice:a|b|c} {cursor}.\n" +
-                   "Действия: macro — макрос из вкладки «Макросы»; open — открыть папку/файл; " +
-                   "launch — запустить приложение (путь с пробелами — в кавычках).",
+                   "Действия: macro — именованный макрос; open — открыть папку/файл; " +
+                   "launch — запустить приложение (путь с пробелами указывается в кавычках).",
             Opacity = 0.65,
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             IsVisible = false,
-            Margin = new Thickness(0, 4, 0, 4)
+            Margin = new Thickness(0, 4)
         };
+        _triggerStatus = BuildStatusText();
         _grid = BuildGrid();
-        _btnSave = new Button { Content = "Сохранить", IsEnabled = false, Classes = { "accent" } };
+        _btnSave = new Button
+        {
+            Content = "Сохранить",
+            IsEnabled = false,
+            Classes = { "accent" }
+        };
 
-        _macroList = new ListBox();
+        _macroList = new ListBox { ItemsSource = _macroNames };
         _macroName = new TextBox();
         _macroSteps = new TextBox
         {
@@ -155,14 +213,20 @@ internal sealed class SettingsWindow : Window
             TextWrapping = TextWrapping.NoWrap,
             FontFamily = new FontFamily("Cascadia Mono,Consolas,monospace")
         };
-        _macroBtnSave = new Button { Content = "Сохранить макросы", IsEnabled = false, Classes = { "accent" } };
+        _macroBtnSave = new Button
+        {
+            Content = "Сохранить макросы",
+            IsEnabled = false,
+            Classes = { "accent" }
+        };
+        _macroStatus = BuildStatusText();
 
         var tabs = new TabControl
         {
             Items =
             {
                 new TabItem { Header = "Триггеры", Content = BuildTriggersTab() },
-                new TabItem { Header = "Макросы",  Content = BuildMacrosTab() }
+                new TabItem { Header = "Макросы", Content = BuildMacrosTab() }
             }
         };
         Content = new Border { Padding = new Thickness(12), Child = tabs };
@@ -174,9 +238,12 @@ internal sealed class SettingsWindow : Window
         Closing += OnClosingGuard;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Triggers tab
-    // ═══════════════════════════════════════════════════════════════
+    private static TextBlock BuildStatusText() => new()
+    {
+        Opacity = 0.65,
+        VerticalAlignment = VerticalAlignment.Center,
+        HorizontalAlignment = HorizontalAlignment.Right
+    };
 
     private DataGrid BuildGrid()
     {
@@ -196,7 +263,7 @@ internal sealed class SettingsWindow : Window
         {
             Header = "Тип",
             Width = new DataGridLength(1.1, DataGridLengthUnitType.Star),
-            CellTemplate = new FuncDataTemplate<TriggerRow>((row, _) =>
+            CellTemplate = new FuncDataTemplate<TriggerRow>((_, _) =>
             {
                 var combo = new ComboBox
                 {
@@ -205,7 +272,8 @@ internal sealed class SettingsWindow : Window
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(4, 0)
                 };
-                combo.Bind(ComboBox.SelectedItemProperty, new Binding(nameof(TriggerRow.Type)) { Mode = BindingMode.TwoWay });
+                combo.Bind(ComboBox.SelectedItemProperty,
+                    new Binding(nameof(TriggerRow.Type)) { Mode = BindingMode.TwoWay });
                 return combo;
             })
         });
@@ -214,17 +282,19 @@ internal sealed class SettingsWindow : Window
         {
             Header = "Триггер",
             Width = new DataGridLength(1.2, DataGridLengthUnitType.Star),
-            CellTemplate = new FuncDataTemplate<TriggerRow>((row, _) =>
+            CellTemplate = new FuncDataTemplate<TriggerRow>((_, _) =>
             {
-                var tb = new TextBox
+                var text = new TextBox
                 {
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(4, 0),
                     Watermark = "!new"
                 };
-                tb.Bind(TextBox.TextProperty, new Binding(nameof(TriggerRow.Trigger)) { Mode = BindingMode.TwoWay });
-                tb.Bind(InputElement.IsEnabledProperty, new Binding(nameof(TriggerRow.TriggerEditable)));
-                return tb;
+                text.Bind(TextBox.TextProperty,
+                    new Binding(nameof(TriggerRow.Trigger)) { Mode = BindingMode.TwoWay });
+                text.Bind(InputElement.IsEnabledProperty,
+                    new Binding(nameof(TriggerRow.TriggerEditable)));
+                return text;
             })
         });
 
@@ -232,9 +302,9 @@ internal sealed class SettingsWindow : Window
         {
             Header = "Шорткат / Лидер",
             Width = new DataGridLength(1.6, DataGridLengthUnitType.Star),
-            CellTemplate = new FuncDataTemplate<TriggerRow>((row, _) =>
+            CellTemplate = new FuncDataTemplate<TriggerRow>((_, _) =>
             {
-                var btn = new Button
+                var button = new Button
                 {
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     HorizontalContentAlignment = HorizontalAlignment.Left,
@@ -242,17 +312,19 @@ internal sealed class SettingsWindow : Window
                     Margin = new Thickness(4, 0),
                     Background = Brushes.Transparent
                 };
-                btn.Bind(ContentControl.ContentProperty, new Binding(nameof(TriggerRow.HotkeyDisplay)));
-                btn.Bind(InputElement.IsEnabledProperty, new Binding(nameof(TriggerRow.HotkeyEditable)));
-                btn.Click += async (_, _) =>
+                button.Bind(ContentControl.ContentProperty,
+                    new Binding(nameof(TriggerRow.HotkeyDisplay)));
+                button.Bind(InputElement.IsEnabledProperty,
+                    new Binding(nameof(TriggerRow.HotkeyEditable)));
+                button.Click += async (_, _) =>
                 {
-                    if (btn.DataContext is not TriggerRow r) return;
-                    var recorder = new HotkeyRecorderWindow(leaderMode: r.Type == "Лидер");
+                    if (button.DataContext is not TriggerRow row) return;
+                    var recorder = new HotkeyRecorderWindow(row.Type == "Лидер");
                     string? combo = await recorder.ShowDialog<string?>(this);
                     if (!string.IsNullOrEmpty(combo))
-                        r.Hotkey = combo;
+                        row.Hotkey = combo;
                 };
-                return btn;
+                return button;
             })
         });
 
@@ -260,9 +332,9 @@ internal sealed class SettingsWindow : Window
         {
             Header = "Значение",
             Width = new DataGridLength(3.0, DataGridLengthUnitType.Star),
-            CellTemplate = new FuncDataTemplate<TriggerRow>((row, _) =>
+            CellTemplate = new FuncDataTemplate<TriggerRow>((_, _) =>
             {
-                var btn = new Button
+                var button = new Button
                 {
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     HorizontalContentAlignment = HorizontalAlignment.Left,
@@ -270,19 +342,25 @@ internal sealed class SettingsWindow : Window
                     Margin = new Thickness(4, 0),
                     Background = Brushes.Transparent
                 };
-                btn.Bind(ContentControl.ContentProperty, new Binding(nameof(TriggerRow.ValuePreview)));
-                btn.Click += async (_, _) =>
+                button.Bind(ContentControl.ContentProperty,
+                    new Binding(nameof(TriggerRow.ValuePreview)));
+                button.Click += async (_, _) =>
                 {
-                    if (btn.DataContext is not TriggerRow r) return;
-                    var macroNames = r.Action == "macro"
-                        ? _macroDefs.Select(m => m.Name).Where(n => !string.IsNullOrWhiteSpace(n)).ToList()
+                    if (button.DataContext is not TriggerRow row) return;
+
+                    IReadOnlyList<string>? macroNames = row.Action == "macro"
+                        ? _macroDefs.Select(m => m.Name.Trim())
+                            .Where(n => n.Length > 0)
+                            .ToList()
                         : null;
-                    var editor = new ValueEditorWindow(r.Value, r.Trigger.Length > 0 ? r.Trigger : r.Hotkey, macroNames);
+
+                    string rowName = row.Trigger.Length > 0 ? row.Trigger : row.Hotkey;
+                    var editor = new ValueEditorWindow(row.Value, rowName, macroNames);
                     string? result = await editor.ShowDialog<string?>(this);
                     if (result != null)
-                        r.Value = result;
+                        row.Value = result;
                 };
-                return btn;
+                return button;
             })
         });
 
@@ -290,15 +368,16 @@ internal sealed class SettingsWindow : Window
         {
             Header = "Контекст",
             Width = new DataGridLength(1.3, DataGridLengthUnitType.Star),
-            CellTemplate = new FuncDataTemplate<TriggerRow>((row, _) =>
+            CellTemplate = new FuncDataTemplate<TriggerRow>((_, _) =>
             {
-                var tb = new TextBox
+                var text = new TextBox
                 {
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(4, 0)
                 };
-                tb.Bind(TextBox.TextProperty, new Binding(nameof(TriggerRow.Context)) { Mode = BindingMode.TwoWay });
-                return tb;
+                text.Bind(TextBox.TextProperty,
+                    new Binding(nameof(TriggerRow.Context)) { Mode = BindingMode.TwoWay });
+                return text;
             })
         });
 
@@ -306,7 +385,7 @@ internal sealed class SettingsWindow : Window
         {
             Header = "Действие",
             Width = new DataGridLength(1.2, DataGridLengthUnitType.Star),
-            CellTemplate = new FuncDataTemplate<TriggerRow>((row, _) =>
+            CellTemplate = new FuncDataTemplate<TriggerRow>((_, _) =>
             {
                 var combo = new ComboBox
                 {
@@ -315,7 +394,8 @@ internal sealed class SettingsWindow : Window
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(4, 0)
                 };
-                combo.Bind(ComboBox.SelectedItemProperty, new Binding(nameof(TriggerRow.Action)) { Mode = BindingMode.TwoWay });
+                combo.Bind(ComboBox.SelectedItemProperty,
+                    new Binding(nameof(TriggerRow.Action)) { Mode = BindingMode.TwoWay });
                 return combo;
             })
         });
@@ -335,80 +415,96 @@ internal sealed class SettingsWindow : Window
         hintToggle.Click += (_, _) =>
         {
             _hint.IsVisible = !_hint.IsVisible;
-            hintToggle.Content = _hint.IsVisible ? "Справка по синтаксису ▾" : "Справка по синтаксису ▸";
+            hintToggle.Content = _hint.IsVisible
+                ? "Справка по синтаксису ▾"
+                : "Справка по синтаксису ▸";
         };
 
-        var btnAdd = new Button { Content = "＋ Добавить" };
-        var btnDelete = new Button { Content = "Удалить" };
-        btnAdd.Click += OnAdd;
-        btnDelete.Click += OnDelete;
+        var add = new Button { Content = "＋ Добавить" };
+        var delete = new Button { Content = "Удалить" };
+        add.Click += OnAdd;
+        delete.Click += OnDelete;
         _btnSave.Click += OnSave;
 
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
-            Margin = new Thickness(0, 10, 0, 0),
-            Children = { btnAdd, btnDelete, _btnSave }
+            Children = { add, delete, _btnSave }
         };
+
+        var footer = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
+        DockPanel.SetDock(buttons, Dock.Left);
+        footer.Children.Add(buttons);
+        footer.Children.Add(_triggerStatus);
 
         var root = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
         DockPanel.SetDock(_filterPanel, Dock.Top);
         DockPanel.SetDock(hintToggle, Dock.Top);
         DockPanel.SetDock(_hint, Dock.Top);
-        DockPanel.SetDock(buttons, Dock.Bottom);
+        DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(_filterPanel);
         root.Children.Add(hintToggle);
         root.Children.Add(_hint);
-        root.Children.Add(buttons);
+        root.Children.Add(footer);
         root.Children.Add(_grid);
         return root;
     }
 
-    private void PopulateGrid(List<TriggerEntry> triggers)
+    private void PopulateGrid(IEnumerable<TriggerEntry> triggers)
     {
         _loading = true;
         try
         {
             _rows.Clear();
-            foreach (var t in triggers)
+            foreach (var trigger in triggers)
             {
-                var row = TriggerRow.From(t);
+                var row = TriggerRow.From(trigger);
                 AttachDirtyTracking(row);
                 _rows.Add(row);
             }
+
             _dirty = false;
             _btnSave.IsEnabled = false;
+            _triggerStatus.Text = "";
         }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+        }
+
         ApplyFilter();
     }
 
-    /// <summary>
-    /// Row property setters only raise PropertyChanged on a real value change,
-    /// so this fires on user edits — not when cell bindings initialize.
-    /// </summary>
     private void AttachDirtyTracking(TriggerRow row)
     {
-        row.PropertyChanged += (_, ev) =>
+        row.PropertyChanged += (_, args) =>
         {
-            if (ev.PropertyName is nameof(TriggerRow.Type) or nameof(TriggerRow.Trigger)
-                or nameof(TriggerRow.Hotkey) or nameof(TriggerRow.Value)
-                or nameof(TriggerRow.Context) or nameof(TriggerRow.Action))
+            if (args.PropertyName is nameof(TriggerRow.Type)
+                or nameof(TriggerRow.Trigger)
+                or nameof(TriggerRow.Hotkey)
+                or nameof(TriggerRow.Value)
+                or nameof(TriggerRow.Context)
+                or nameof(TriggerRow.Action))
+            {
                 MarkDirty();
+            }
+
+            if (!_loading && args.PropertyName == nameof(TriggerRow.Context))
+            {
+                PopulateFilters();
+                if (_filterContext != "Все")
+                    ApplyFilter();
+            }
         };
     }
 
-    // ── Context filter chips ────────────────────────────────────────
-
     private void PopulateFilters()
     {
-        _filterPanel.Children.Clear();
-
-        var counts = new Dictionary<string, int>();
-        foreach (var r in _rows)
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in _rows)
         {
-            foreach (var part in r.Context.Split(',', StringSplitOptions.TrimEntries))
+            foreach (var part in row.Context.Split(',', StringSplitOptions.TrimEntries))
             {
                 string key = part == "*" ? "Глобальные" : part;
                 if (key.Length == 0) continue;
@@ -416,10 +512,23 @@ internal sealed class SettingsWindow : Window
             }
         }
 
+        var available = new HashSet<string>(counts.Keys, StringComparer.OrdinalIgnoreCase)
+            { "Все" };
+        if (!available.Contains(_filterContext))
+            _filterContext = "Все";
+
+        _filterPanel.Children.Clear();
         AddFilterChip("Все", _rows.Count);
-        if (counts.TryGetValue("Глобальные", out int g)) { AddFilterChip("Глобальные", g); counts.Remove("Глобальные"); }
-        foreach (var kv in counts.OrderByDescending(kv => kv.Value))
-            AddFilterChip(kv.Key, kv.Value);
+
+        if (counts.Remove("Глобальные", out int globalCount))
+            AddFilterChip("Глобальные", globalCount);
+
+        foreach (var pair in counts
+                     .OrderByDescending(p => p.Value)
+                     .ThenBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            AddFilterChip(pair.Key, pair.Value);
+        }
     }
 
     private void AddFilterChip(string label, int count)
@@ -427,7 +536,7 @@ internal sealed class SettingsWindow : Window
         var chip = new ToggleButton
         {
             Content = $"{label} ({count})",
-            IsChecked = label == _filterContext,
+            IsChecked = string.Equals(label, _filterContext, StringComparison.OrdinalIgnoreCase),
             Margin = new Thickness(0, 0, 6, 4),
             Padding = new Thickness(10, 4),
             CornerRadius = new CornerRadius(12)
@@ -435,8 +544,8 @@ internal sealed class SettingsWindow : Window
         chip.Click += (_, _) =>
         {
             _filterContext = label;
-            foreach (var c in _filterPanel.Children.OfType<ToggleButton>())
-                c.IsChecked = ReferenceEquals(c, chip);
+            foreach (var item in _filterPanel.Children.OfType<ToggleButton>())
+                item.IsChecked = ReferenceEquals(item, chip);
             ApplyFilter();
         };
         _filterPanel.Children.Add(chip);
@@ -444,19 +553,19 @@ internal sealed class SettingsWindow : Window
 
     private void ApplyFilter()
     {
-        // DataGrid has no per-row visibility — swap the ItemsSource instead.
         if (_filterContext == "Все")
         {
             _grid.ItemsSource = _rows;
             return;
         }
 
-        _grid.ItemsSource = _rows.Where(r =>
+        _grid.ItemsSource = _rows.Where(row =>
         {
-            var parts = r.Context.Split(',', StringSplitOptions.TrimEntries);
+            var parts = row.Context.Split(',', StringSplitOptions.TrimEntries);
             return _filterContext == "Глобальные"
-                ? parts.Contains("*")
-                : parts.Any(c => c == _filterContext);
+                ? parts.Any(p => p == "*")
+                : parts.Any(p => string.Equals(
+                    p, _filterContext, StringComparison.OrdinalIgnoreCase));
         }).ToList();
     }
 
@@ -465,134 +574,156 @@ internal sealed class SettingsWindow : Window
         if (_loading) return;
         _dirty = true;
         _btnSave.IsEnabled = true;
+        _triggerStatus.Text = "Есть несохранённые изменения";
     }
 
-    // ── Add / delete / save ─────────────────────────────────────────
-
-    private void OnAdd(object? sender, RoutedEventArgs e)
+    private void OnAdd(object? sender, RoutedEventArgs args)
     {
         var row = new TriggerRow { Trigger = "!new", Value = "текст подстановки" };
         AttachDirtyTracking(row);
         _rows.Add(row);
         MarkDirty();
 
-        // Reset the filter so the new row is visible.
         _filterContext = "Все";
-        foreach (var c in _filterPanel.Children.OfType<ToggleButton>())
-            c.IsChecked = (c.Content as string)?.StartsWith("Все ") == true;
+        PopulateFilters();
         ApplyFilter();
         _grid.SelectedItem = row;
         _grid.ScrollIntoView(row, null);
     }
 
-    private async void OnDelete(object? sender, RoutedEventArgs e)
+    private async void OnDelete(object? sender, RoutedEventArgs args)
     {
         if (_grid.SelectedItem is not TriggerRow row) return;
 
         string name = row.Trigger.Length > 0 ? row.Trigger : row.Hotkey;
-        bool ok = await ConfirmDialog.Show(this, $"Удалить триггер «{name}»?");
-        if (!ok) return;
+        if (!await ConfirmDialog.Show(this, $"Удалить триггер «{name}»?"))
+            return;
 
         _rows.Remove(row);
         MarkDirty();
+        PopulateFilters();
         ApplyFilter();
     }
 
-    private async void OnSave(object? sender, RoutedEventArgs e)
+    private async void OnSave(object? sender, RoutedEventArgs args) =>
+        await SaveTriggersAsync();
+
+    private async Task<bool> SaveTriggersAsync()
     {
-        var list = new List<TriggerEntry>();
+        var entries = new List<TriggerEntry>();
 
         for (int i = 0; i < _rows.Count; i++)
         {
-            var r = _rows[i];
-            string type = r.Type;
-            string trigger = r.Trigger.Trim();
-            string hotkey = r.Hotkey.Trim();
+            TriggerRow row = _rows[i];
+            string type = row.Type;
+            string trigger = row.Trigger.Trim();
+            string hotkey = row.Hotkey.Trim();
 
             string? error = null;
             if (type == "Текст" && trigger.Length == 0)
                 error = $"Строка {i + 1}: поле «Триггер» не может быть пустым.";
             else if (type is "Шорткат" or "Лидер" && hotkey.Length == 0)
-                error = $"Строка {i + 1}: сочетание клавиш не записано. Нажмите на ячейку «Шорткат / Лидер».";
+                error = $"Строка {i + 1}: сочетание клавиш не записано.";
             else if (type == "Лидер" && trigger.Length == 0)
-                error = $"Строка {i + 1}: для лидера в поле «Триггер» укажите «остаток» — клавиши, которые набираются при зажатом аккорде (напр. gm).";
+                error = $"Строка {i + 1}: для лидера укажите остаток в поле «Триггер» (например gm).";
             else if (type == "Шорткат" && SystemHotkeys.IsSystem(hotkey))
                 error = $"Строка {i + 1}: «{hotkey}» — системное сочетание, его нельзя назначить.";
             else if (type == "Лидер" && SystemHotkeys.IsSystem($"{hotkey}+{trigger}"))
-                error = $"Строка {i + 1}: аккорд «{hotkey}» + «{trigger}» образует системное сочетание.";
+                error = $"Строка {i + 1}: «{hotkey}+{trigger}» образует системное сочетание.";
 
             if (error != null)
             {
                 await MessageDialog.Show(this, "Ошибка", error);
-                return;
+                return false;
             }
 
-            list.Add(r.ToEntry());
+            entries.Add(row.ToEntry());
         }
 
-        // ── Conflict detection ────────────────────────────────────
-        var conflicts = new List<string>();
-        for (int i = 0; i < list.Count; i++)
-        {
-            for (int j = i + 1; j < list.Count; j++)
-            {
-                var a = list[i]; var b = list[j];
-                if (a.Trigger.Length > 0 && a.Trigger == b.Trigger
-                    && string.IsNullOrEmpty(a.Hotkey) && string.IsNullOrEmpty(b.Hotkey)
-                    && string.IsNullOrEmpty(a.Leader) && string.IsNullOrEmpty(b.Leader)
-                    && ContextsOverlap(a.Context, b.Context))
-                    conflicts.Add($"Строки {i + 1} и {j + 1}: триггер «{a.Trigger}»");
-
-                if (!string.IsNullOrEmpty(a.Hotkey) && !string.IsNullOrEmpty(b.Hotkey)
-                    && string.Equals(a.Hotkey, b.Hotkey, StringComparison.OrdinalIgnoreCase)
-                    && ContextsOverlap(a.Context, b.Context))
-                    conflicts.Add($"Строки {i + 1} и {j + 1}: шорткат «{a.Hotkey}»");
-
-                if (!string.IsNullOrEmpty(a.Leader) && !string.IsNullOrEmpty(b.Leader)
-                    && string.Equals(a.Leader, b.Leader, StringComparison.OrdinalIgnoreCase)
-                    && a.Trigger == b.Trigger
-                    && ContextsOverlap(a.Context, b.Context))
-                    conflicts.Add($"Строки {i + 1} и {j + 1}: лидер «{a.Leader}+{a.Trigger}»");
-            }
-        }
+        var conflicts = FindConflicts(entries);
         if (conflicts.Count > 0)
         {
             await MessageDialog.Show(this, "Предупреждение",
                 "Обнаружены возможные конфликты:\n\n" + string.Join("\n", conflicts));
         }
 
-        _config.Save(list);
+        _config.Save(entries);
         _dirty = false;
         _btnSave.IsEnabled = false;
-
+        _triggerStatus.Text = $"Сохранено триггеров: {entries.Count}";
         PopulateFilters();
+        return true;
+    }
+
+    private static List<string> FindConflicts(IReadOnlyList<TriggerEntry> entries)
+    {
+        var conflicts = new List<string>();
+        for (int i = 0; i < entries.Count; i++)
+        {
+            for (int j = i + 1; j < entries.Count; j++)
+            {
+                TriggerEntry a = entries[i];
+                TriggerEntry b = entries[j];
+
+                if (a.Trigger.Length > 0
+                    && a.Trigger == b.Trigger
+                    && string.IsNullOrEmpty(a.Hotkey)
+                    && string.IsNullOrEmpty(b.Hotkey)
+                    && string.IsNullOrEmpty(a.Leader)
+                    && string.IsNullOrEmpty(b.Leader)
+                    && ContextsOverlap(a.Context, b.Context))
+                {
+                    conflicts.Add($"Строки {i + 1} и {j + 1}: триггер «{a.Trigger}»");
+                }
+
+                if (!string.IsNullOrEmpty(a.Hotkey)
+                    && !string.IsNullOrEmpty(b.Hotkey)
+                    && string.Equals(a.Hotkey, b.Hotkey, StringComparison.OrdinalIgnoreCase)
+                    && ContextsOverlap(a.Context, b.Context))
+                {
+                    conflicts.Add($"Строки {i + 1} и {j + 1}: шорткат «{a.Hotkey}»");
+                }
+
+                if (!string.IsNullOrEmpty(a.Leader)
+                    && !string.IsNullOrEmpty(b.Leader)
+                    && string.Equals(a.Leader, b.Leader, StringComparison.OrdinalIgnoreCase)
+                    && a.Trigger == b.Trigger
+                    && ContextsOverlap(a.Context, b.Context))
+                {
+                    conflicts.Add($"Строки {i + 1} и {j + 1}: лидер «{a.Leader}+{a.Trigger}»");
+                }
+            }
+        }
+
+        return conflicts;
     }
 
     private static bool ContextsOverlap(string a, string b)
     {
-        var pa = a.Split(',', StringSplitOptions.TrimEntries).Where(s => !s.StartsWith('!')).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var pb = b.Split(',', StringSplitOptions.TrimEntries).Where(s => !s.StartsWith('!')).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (pa.Contains("*") || pb.Contains("*")) return true;
-        return pa.Overlaps(pb);
-    }
+        var positiveA = a.Split(',', StringSplitOptions.TrimEntries)
+            .Where(value => !value.StartsWith('!'))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var positiveB = b.Split(',', StringSplitOptions.TrimEntries)
+            .Where(value => !value.StartsWith('!'))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Macros tab
-    // ═══════════════════════════════════════════════════════════════
+        if (positiveA.Contains("*") || positiveB.Contains("*")) return true;
+        return positiveA.Overlaps(positiveB);
+    }
 
     private Control BuildMacrosTab()
     {
-        var btnMacroAdd = new Button { Content = "＋" };
-        var btnMacroDel = new Button { Content = "－" };
-        btnMacroAdd.Click += OnMacroAdd;
-        btnMacroDel.Click += OnMacroDelete;
+        var add = new Button { Content = "＋" };
+        var delete = new Button { Content = "－" };
+        add.Click += OnMacroAdd;
+        delete.Click += OnMacroDelete;
 
         var leftButtons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
             Margin = new Thickness(0, 6, 0, 0),
-            Children = { btnMacroAdd, btnMacroDel }
+            Children = { add, delete }
         };
 
         var left = new DockPanel { Width = 220 };
@@ -601,43 +732,48 @@ internal sealed class SettingsWindow : Window
         left.Children.Add(_macroList);
         _macroList.SelectionChanged += OnMacroListSelected;
 
-        var nameRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-        var nameLbl = new TextBlock
+        var nameLabel = new TextBlock
         {
             Text = "Имя:",
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 8, 0)
         };
-        DockPanel.SetDock(nameLbl, Dock.Left);
-        nameRow.Children.Add(nameLbl);
+        var nameRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        DockPanel.SetDock(nameLabel, Dock.Left);
+        nameRow.Children.Add(nameLabel);
         nameRow.Children.Add(_macroName);
-        _macroName.TextChanged += (_, _) => { if (!_macroLoading) MarkMacroDirty(); };
-        _macroSteps.TextChanged += (_, _) => { if (!_macroLoading) MarkMacroDirty(); };
+
+        _macroName.TextChanged += OnMacroNameChanged;
+        _macroSteps.TextChanged += OnMacroStepsChanged;
 
         var help = new TextBlock
         {
-            Text = "Шаги (по одному на строку): type <текст> · key <сочетание> (Ctrl+S, Enter, F5) · " +
-                   "sleep <мс> · click/dclick/rclick x,y · run <команда>. Строки с # игнорируются.",
+            Text = "Шаги (по одному на строку): type <текст> · key <сочетание> · " +
+                   "sleep <мс> · click/dclick/rclick x,y · run <команда>. " +
+                   "Строки, начинающиеся с #, игнорируются.",
             Opacity = 0.6,
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 8, 0, 0)
         };
 
-        var saveRow = new StackPanel
+        _macroBtnSave.Click += OnMacroSave;
+        var saveButtons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Margin = new Thickness(0, 8, 0, 0),
             Children = { _macroBtnSave }
         };
-        _macroBtnSave.Click += OnMacroSave;
+        var footer = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
+        DockPanel.SetDock(saveButtons, Dock.Left);
+        footer.Children.Add(saveButtons);
+        footer.Children.Add(_macroStatus);
 
         var right = new DockPanel { Margin = new Thickness(12, 0, 0, 0) };
         DockPanel.SetDock(nameRow, Dock.Top);
-        DockPanel.SetDock(saveRow, Dock.Bottom);
+        DockPanel.SetDock(footer, Dock.Bottom);
         DockPanel.SetDock(help, Dock.Bottom);
         right.Children.Add(nameRow);
-        right.Children.Add(saveRow);
+        right.Children.Add(footer);
         right.Children.Add(help);
         right.Children.Add(_macroSteps);
 
@@ -653,8 +789,9 @@ internal sealed class SettingsWindow : Window
         _macroLoading = true;
         try
         {
-            _macroList.ItemsSource = null;
-            _macroList.ItemsSource = _macroDefs.Select(m => m.Name).ToList();
+            _macroNames.Clear();
+            foreach (var macro in _macroDefs)
+                _macroNames.Add(macro.Name);
 
             _macroCurrent = -1;
             if (_macroDefs.Count > 0)
@@ -669,20 +806,23 @@ internal sealed class SettingsWindow : Window
 
             _macroDirty = false;
             _macroBtnSave.IsEnabled = false;
+            _macroStatus.Text = "";
         }
-        finally { _macroLoading = false; }
+        finally
+        {
+            _macroLoading = false;
+        }
     }
 
-    private void OnMacroListSelected(object? sender, SelectionChangedEventArgs e)
+    private void OnMacroListSelected(object? sender, SelectionChangedEventArgs args)
     {
         if (_macroLoading) return;
-        FlushEditorToCurrent();
         LoadMacroIntoEditor(_macroList.SelectedIndex);
     }
 
     private void LoadMacroIntoEditor(int index)
     {
-        bool prev = _macroLoading;
+        bool previous = _macroLoading;
         _macroLoading = true;
         try
         {
@@ -702,124 +842,184 @@ internal sealed class SettingsWindow : Window
                 _macroSteps.IsEnabled = false;
             }
         }
-        finally { _macroLoading = prev; }
-    }
-
-    private void FlushEditorToCurrent()
-    {
-        if (_macroCurrent < 0 || _macroCurrent >= _macroDefs.Count) return;
-
-        var def = _macroDefs[_macroCurrent];
-        def.Name = (_macroName.Text ?? "").Trim();
-        def.Steps = (_macroSteps.Text ?? "")
-            .Replace("\r", "")
-            .Split('\n')
-            .ToList();
-
-        // Keep the list label in sync without re-triggering selection logic.
-        _macroLoading = true;
-        try
+        finally
         {
-            int sel = _macroList.SelectedIndex;
-            _macroList.ItemsSource = _macroDefs.Select(m => m.Name).ToList();
-            _macroList.SelectedIndex = sel;
+            _macroLoading = previous;
         }
-        finally { _macroLoading = false; }
     }
 
-    private void OnMacroAdd(object? sender, RoutedEventArgs e)
+    private void OnMacroNameChanged(object? sender, TextChangedEventArgs args)
     {
-        FlushEditorToCurrent();
+        if (_macroLoading || _macroCurrent < 0 || _macroCurrent >= _macroDefs.Count)
+            return;
 
-        var def = new MacroDef { Name = "новый_макрос", Steps = new List<string> { "key Ctrl+S" } };
-        _macroDefs.Add(def);
+        MacroDef current = _macroDefs[_macroCurrent];
+        string oldName = current.Name;
+        string newName = _macroName.Text ?? "";
+        if (oldName == newName) return;
 
-        _macroLoading = true;
-        try { _macroList.ItemsSource = _macroDefs.Select(m => m.Name).ToList(); }
-        finally { _macroLoading = false; }
+        current.Name = newName;
+        _macroNames[_macroCurrent] = newName;
+        RenameMacroReferences(oldName, newName);
+        MarkMacroDirty();
+    }
 
-        _macroList.SelectedIndex = _macroDefs.Count - 1; // fires selection → loads editor
+    private void OnMacroStepsChanged(object? sender, TextChangedEventArgs args)
+    {
+        if (_macroLoading || _macroCurrent < 0 || _macroCurrent >= _macroDefs.Count)
+            return;
+
+        _macroDefs[_macroCurrent].Steps = ParseMacroSteps(_macroSteps.Text ?? "");
+        MarkMacroDirty();
+    }
+
+    private static List<string> ParseMacroSteps(string text) =>
+        text.Replace("\r", "").Split('\n').ToList();
+
+    private void RenameMacroReferences(string oldName, string newName)
+    {
+        if (string.IsNullOrWhiteSpace(oldName)) return;
+
+        foreach (var row in _rows)
+        {
+            if (row.Action == "macro"
+                && string.Equals(row.Value, oldName, StringComparison.OrdinalIgnoreCase))
+            {
+                row.Value = newName;
+            }
+        }
+    }
+
+    private void OnMacroAdd(object? sender, RoutedEventArgs args)
+    {
+        string baseName = "новый_макрос";
+        string name = baseName;
+        int suffix = 2;
+        var existing = _macroDefs.Select(m => m.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        while (existing.Contains(name))
+            name = $"{baseName}_{suffix++}";
+
+        var macro = new MacroDef
+        {
+            Name = name,
+            Steps = new List<string> { "key Ctrl+S" }
+        };
+        _macroDefs.Add(macro);
+        _macroNames.Add(name);
+        _macroList.SelectedIndex = _macroDefs.Count - 1;
         MarkMacroDirty();
         _macroName.Focus();
         _macroName.SelectAll();
     }
 
-    private async void OnMacroDelete(object? sender, RoutedEventArgs e)
+    private async void OnMacroDelete(object? sender, RoutedEventArgs args)
     {
-        int idx = _macroList.SelectedIndex;
-        if (idx < 0 || idx >= _macroDefs.Count) return;
+        int index = _macroList.SelectedIndex;
+        if (index < 0 || index >= _macroDefs.Count) return;
 
-        bool ok = await ConfirmDialog.Show(this, $"Удалить макрос «{_macroDefs[idx].Name}»?");
-        if (!ok) return;
-
-        _macroDefs.RemoveAt(idx);
+        string name = _macroDefs[index].Name;
+        if (!await ConfirmDialog.Show(this, $"Удалить макрос «{name}»?"))
+            return;
 
         _macroLoading = true;
-        try { _macroList.ItemsSource = _macroDefs.Select(m => m.Name).ToList(); }
-        finally { _macroLoading = false; }
+        try
+        {
+            _macroDefs.RemoveAt(index);
+            _macroNames.RemoveAt(index);
+            _macroCurrent = -1;
+            _macroList.SelectedIndex = _macroDefs.Count == 0
+                ? -1
+                : Math.Min(index, _macroDefs.Count - 1);
+        }
+        finally
+        {
+            _macroLoading = false;
+        }
 
-        _macroCurrent = -1;
-        if (_macroDefs.Count > 0)
-            _macroList.SelectedIndex = Math.Min(idx, _macroDefs.Count - 1);
-        else
-            LoadMacroIntoEditor(-1);
-
+        LoadMacroIntoEditor(_macroList.SelectedIndex);
         MarkMacroDirty();
     }
 
-    private async void OnMacroSave(object? sender, RoutedEventArgs e)
+    private async void OnMacroSave(object? sender, RoutedEventArgs args) =>
+        await SaveMacrosAsync();
+
+    private async Task<bool> SaveMacrosAsync()
     {
-        FlushEditorToCurrent();
-
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var m in _macroDefs)
+        for (int i = 0; i < _macroDefs.Count; i++)
         {
-            string? error = null;
-            if (string.IsNullOrWhiteSpace(m.Name))
-                error = "У каждого макроса должно быть имя.";
-            else if (!seen.Add(m.Name))
-                error = $"Имя макроса «{m.Name}» повторяется. Имена должны быть уникальными.";
+            MacroDef macro = _macroDefs[i];
+            string oldName = macro.Name;
+            string normalizedName = oldName.Trim();
 
-            if (error != null)
+            if (normalizedName.Length == 0)
             {
-                await MessageDialog.Show(this, "Ошибка", error);
-                return;
+                await MessageDialog.Show(this, "Ошибка", "У каждого макроса должно быть имя.");
+                return false;
+            }
+
+            if (!seen.Add(normalizedName))
+            {
+                await MessageDialog.Show(this, "Ошибка",
+                    $"Имя макроса «{normalizedName}» повторяется. Имена должны быть уникальными.");
+                return false;
+            }
+
+            if (oldName != normalizedName)
+            {
+                macro.Name = normalizedName;
+                _macroNames[i] = normalizedName;
+                RenameMacroReferences(oldName, normalizedName);
             }
         }
 
         _macros.Save(_macroDefs);
         _macroDirty = false;
         _macroBtnSave.IsEnabled = false;
+        _macroStatus.Text = $"Сохранено макросов: {_macroDefs.Count}";
+        return true;
     }
 
     private void MarkMacroDirty()
     {
+        if (_macroLoading) return;
         _macroDirty = true;
         _macroBtnSave.IsEnabled = true;
+        _macroStatus.Text = "Есть несохранённые изменения";
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Close guard
-    // ═══════════════════════════════════════════════════════════════
-
-    private bool _closeConfirmed;
-
-    private async void OnClosingGuard(object? sender, WindowClosingEventArgs e)
+    private async void OnClosingGuard(object? sender, WindowClosingEventArgs args)
     {
-        FlushEditorToCurrent();
-        if (_closeConfirmed || (!_dirty && !_macroDirty)) return;
+        if (_closeConfirmed || (!_dirty && !_macroDirty))
+            return;
 
-        e.Cancel = true;
-        var result = await ConfirmDialog.Show(this,
-            "Есть несохранённые изменения. Сохранить перед закрытием?",
-            yes: "Сохранить", no: "Не сохранять");
+        args.Cancel = true;
+        if (_closingGuardActive)
+            return;
 
-        if (result)
+        _closingGuardActive = true;
+        try
         {
-            if (_macroDirty) OnMacroSave(this, new RoutedEventArgs());
-            if (_dirty) OnSave(this, new RoutedEventArgs());
+            bool save = await ConfirmDialog.Show(this,
+                "Есть несохранённые изменения. Сохранить перед закрытием?",
+                yes: "Сохранить",
+                no: "Не сохранять");
+
+            if (save)
+            {
+                if (_macroDirty && !await SaveMacrosAsync())
+                    return;
+                if (_dirty && !await SaveTriggersAsync())
+                    return;
+            }
+
+            _closeConfirmed = true;
+            Close();
         }
-        _closeConfirmed = true;
-        Close();
+        finally
+        {
+            _closingGuardActive = false;
+        }
     }
 }
