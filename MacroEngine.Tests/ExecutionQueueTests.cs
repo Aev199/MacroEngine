@@ -6,52 +6,52 @@ namespace MacroEngine.Tests;
 public sealed class ExecutionQueueTests
 {
     [Fact]
-    public void Jobs_RunStrictlyOneAtATime()
+    public void SecondJob_IsRejectedWhileFirstRuns_AndAcceptedAfterCompletion()
     {
         using var queue = new ExecutionQueue();
-        using var completed = new CountdownEvent(3);
+        using var started = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var firstCompleted = new ManualResetEventSlim();
+        using var secondCompleted = new ManualResetEventSlim();
 
-        int active = 0;
-        int maximumActive = 0;
-        var order = new List<int>();
-        object orderLock = new();
-
-        queue.JobCompleted += _ => completed.Signal();
-
-        for (int index = 1; index <= 3; index++)
+        queue.JobCompleted += description =>
         {
-            int captured = index;
-            Assert.True(queue.TryEnqueue($"job-{captured}", token =>
-            {
-                int nowActive = Interlocked.Increment(ref active);
-                int observed;
-                do
-                {
-                    observed = Volatile.Read(ref maximumActive);
-                    if (observed >= nowActive) break;
-                }
-                while (Interlocked.CompareExchange(ref maximumActive, nowActive, observed) != observed);
+            if (description == "first") firstCompleted.Set();
+            if (description == "second") secondCompleted.Set();
+        };
 
-                lock (orderLock) order.Add(captured);
-                Assert.False(token.WaitHandle.WaitOne(40));
-                Interlocked.Decrement(ref active);
-            }));
-        }
+        Assert.True(queue.TryEnqueue("first", token =>
+        {
+            started.Set();
+            WaitHandle.WaitAny(new[] { release.WaitHandle, token.WaitHandle });
+            token.ThrowIfCancellationRequested();
+        }));
 
-        Assert.True(completed.Wait(TimeSpan.FromSeconds(5)));
-        Assert.Equal(1, maximumActive);
-        Assert.Equal(new[] { 1, 2, 3 }, order);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(queue.IsBusy);
+        Assert.False(queue.TryEnqueue("rejected", _ => throw new InvalidOperationException()));
+
+        release.Set();
+        Assert.True(firstCompleted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(SpinWait.SpinUntil(() => !queue.IsBusy, TimeSpan.FromSeconds(2)));
+
+        Assert.True(queue.TryEnqueue("second", _ => { }));
+        Assert.True(secondCompleted.Wait(TimeSpan.FromSeconds(5)));
     }
 
     [Fact]
-    public void CancelAll_CancelsRunningJobAndDropsPendingJobs()
+    public void CancelAll_CancelsRunningJob_AndAllowsNextJob()
     {
         using var queue = new ExecutionQueue();
         using var started = new ManualResetEventSlim();
         using var cancelled = new ManualResetEventSlim();
+        using var nextCompleted = new ManualResetEventSlim();
 
-        int pendingExecutions = 0;
         queue.JobCancelled += _ => cancelled.Set();
+        queue.JobCompleted += description =>
+        {
+            if (description == "next") nextCompleted.Set();
+        };
 
         Assert.True(queue.TryEnqueue("running", token =>
         {
@@ -59,14 +59,13 @@ public sealed class ExecutionQueueTests
             token.WaitHandle.WaitOne();
             token.ThrowIfCancellationRequested();
         }));
-        Assert.True(queue.TryEnqueue("pending", _ => Interlocked.Increment(ref pendingExecutions)));
 
         Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
         queue.CancelAll();
 
         Assert.True(cancelled.Wait(TimeSpan.FromSeconds(5)));
-        Thread.Sleep(100);
-        Assert.Equal(0, Volatile.Read(ref pendingExecutions));
-        Assert.Equal(0, queue.PendingCount);
+        Assert.True(SpinWait.SpinUntil(() => !queue.IsBusy, TimeSpan.FromSeconds(2)));
+        Assert.True(queue.TryEnqueue("next", _ => { }));
+        Assert.True(nextCompleted.Wait(TimeSpan.FromSeconds(5)));
     }
 }
