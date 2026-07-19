@@ -23,7 +23,31 @@ internal static class AtomicJsonFile
         return Deserialize<T>(json, path);
     }
 
-    public static bool TryLoadBackup<T>(string path, out T value)
+    /// <summary>
+    /// Retry reads to tolerate the short incomplete-file window produced by
+    /// external editors that rewrite JSON in place.
+    /// </summary>
+    public static T LoadStable<T>(string path, int attempts = 5, int delayMilliseconds = 120)
+    {
+        Exception? lastError = null;
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            try
+            {
+                return Load<T>(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+            {
+                lastError = ex;
+                if (attempt + 1 < attempts)
+                    Thread.Sleep(delayMilliseconds);
+            }
+        }
+
+        throw lastError ?? new InvalidDataException($"Cannot read JSON file '{path}'.");
+    }
+
+    public static bool TryRestoreBackup<T>(string path, out T value)
     {
         string backup = BackupPath(path);
         if (!File.Exists(backup))
@@ -34,7 +58,8 @@ internal static class AtomicJsonFile
 
         try
         {
-            value = Load<T>(backup);
+            value = LoadStable<T>(backup, attempts: 2, delayMilliseconds: 50);
+            WriteValidated(path, value, updateBackup: false);
             return true;
         }
         catch
@@ -44,7 +69,10 @@ internal static class AtomicJsonFile
         }
     }
 
-    public static void Save<T>(string path, T value)
+    public static void Save<T>(string path, T value) =>
+        WriteValidated(path, value, updateBackup: true);
+
+    private static void WriteValidated<T>(string path, T value, bool updateBackup)
     {
         string? directory = Path.GetDirectoryName(path);
         if (string.IsNullOrWhiteSpace(directory))
@@ -53,16 +81,15 @@ internal static class AtomicJsonFile
         Directory.CreateDirectory(directory);
 
         string json = JsonSerializer.Serialize(value, WriteOptions);
-        _ = Deserialize<T>(json, path); // validate before touching the current file
+        _ = Deserialize<T>(json, path);
 
         string temp = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         string backup = BackupPath(path);
+        string discarded = temp + ".old";
 
         try
         {
             File.WriteAllText(temp, json, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-            // Flush file contents before replacing the last-known-good config.
             using (var stream = new FileStream(temp, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
                 stream.Flush(flushToDisk: true);
 
@@ -70,7 +97,11 @@ internal static class AtomicJsonFile
             {
                 try
                 {
-                    File.Replace(temp, path, backup, ignoreMetadataErrors: true);
+                    File.Replace(
+                        temp,
+                        path,
+                        updateBackup ? backup : discarded,
+                        ignoreMetadataErrors: true);
                     temp = string.Empty;
                     return;
                 }
@@ -80,10 +111,11 @@ internal static class AtomicJsonFile
                 }
                 catch (IOException)
                 {
-                    // Some filesystems do not support Replace; preserve a backup manually.
+                    // Some filesystems do not implement Replace.
                 }
 
-                File.Copy(path, backup, overwrite: true);
+                if (updateBackup)
+                    File.Copy(path, backup, overwrite: true);
             }
 
             File.Move(temp, path, overwrite: true);
@@ -95,6 +127,8 @@ internal static class AtomicJsonFile
             {
                 try { File.Delete(temp); } catch { }
             }
+
+            try { File.Delete(discarded); } catch { }
         }
     }
 
@@ -103,6 +137,7 @@ internal static class AtomicJsonFile
     private static T Deserialize<T>(string json, string source)
     {
         T? value = JsonSerializer.Deserialize<T>(json, ReadOptions);
-        return value ?? throw new InvalidDataException($"JSON file '{source}' contains null instead of {typeof(T).Name}.");
+        return value ?? throw new InvalidDataException(
+            $"JSON file '{source}' contains null instead of {typeof(T).Name}.");
     }
 }
