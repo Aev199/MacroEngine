@@ -33,7 +33,7 @@ jobs:
           if (-not (git diff --quiet)) {
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add MacroEngine/core/NativeMethods.cs MacroEngine/ui/AppController.cs
-            git commit -m "Bind automation input to the triggering window"
+            git add MacroEngine/modules/TextExpander.cs
+            git commit -m "Preserve nested hook suppression"
             git push origin HEAD:release/avalonia-hardening
           }
