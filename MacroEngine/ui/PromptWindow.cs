@@ -161,15 +161,14 @@ internal sealed class PromptWindow : Window
         if (Dispatcher.UIThread.CheckAccess())
             throw new InvalidOperationException("PromptWindow must not block the UI thread.");
 
-        var createOperation = Dispatcher.UIThread.InvokeAsync(() =>
+        var operation = Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var window = new PromptWindow(label, choices, cancellationToken);
             window.Show();
             window.Activate();
-            return window._result.Task;
+            return await window._result.Task.ConfigureAwait(false);
         });
 
-        Task<string> resultTask = createOperation.GetAwaiter().GetResult();
-        return resultTask.GetAwaiter().GetResult();
+        return operation.GetAwaiter().GetResult();
     }
 }
