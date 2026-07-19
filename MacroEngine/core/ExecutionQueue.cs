@@ -118,10 +118,12 @@ internal sealed class ExecutionQueue : IDisposable
                 lock (_currentLock)
                 {
                     if (ReferenceEquals(_currentCancellation, cancellation))
+                    {
                         _currentCancellation = null;
+                        Interlocked.Exchange(ref _cancelBeforeStart, 0);
+                        Interlocked.Exchange(ref _reserved, 0);
+                    }
                 }
-
-                Interlocked.Exchange(ref _reserved, 0);
             }
         }
     }
