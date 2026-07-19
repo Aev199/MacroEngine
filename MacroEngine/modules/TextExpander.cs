@@ -6,8 +6,8 @@ using MacroEngine.UI;
 namespace MacroEngine.Modules;
 
 /// <summary>
-/// Handles text expansion: erases trigger, resolves tokens, types replacement.
-/// Uses Unicode keystroke injection — 100% reliable, no clipboard, no Ctrl+V.
+/// Handles text expansion, token resolution and checked input injection. Every
+/// operation remains bound to the exact window that owned the trigger.
 /// </summary>
 internal static class TextExpander
 {
@@ -16,36 +16,20 @@ internal static class TextExpander
     private const int VK_LEFT = 0x25;
     private const string CursorMarker = "{cursor}";
 
-    /// <summary>Perform text expansion.</summary>
-    public static void Expand(string rawReplacement, int triggerLength)
+    public static void Expand(
+        string rawReplacement,
+        int triggerLength,
+        AutomationTarget target,
+        CancellationToken cancellationToken = default)
     {
         KeyInterceptor.IsSuppressed = true;
-
-        // Capture the target window up front so we can restore focus if a
-        // {input}/{choice} prompt steals it during token resolution.
-        IntPtr target = NativeMethods.GetForegroundWindow();
-        bool mayPrompt = MayPrompt(rawReplacement);
-
         try
         {
-            Thread.Sleep(60);
-            for (int i = 0; i < triggerLength; i++)
-            {
-                SendKeyDownUp(VK_BACK);
-                Thread.Sleep(15);
-            }
-            Thread.Sleep(30);
+            target.ThrowIfNotForeground(cancellationToken);
+            EraseChars(triggerLength, target, cancellationToken);
 
-            string replacement = ResolveTokens(rawReplacement);
+            string replacement = ResolveTokens(rawReplacement, target, cancellationToken);
 
-            if (mayPrompt && target != IntPtr.Zero)
-            {
-                NativeMethods.SetForegroundWindow(target);
-                Thread.Sleep(50);
-            }
-
-            // {cursor} marks where the caret should land — type everything, then
-            // walk the caret back over the characters that follow the marker.
             int caretBack = 0;
             int idx = replacement.IndexOf(CursorMarker, StringComparison.OrdinalIgnoreCase);
             if (idx >= 0)
@@ -54,80 +38,81 @@ internal static class TextExpander
                 replacement = replacement.Remove(idx, CursorMarker.Length);
             }
 
-            TypeUnicode(replacement);
+            TypeUnicode(replacement, target, cancellationToken);
 
             for (int i = 0; i < caretBack; i++)
+            {
+                target.ThrowIfNotForeground(cancellationToken);
                 SendKeyDownUp(VK_LEFT);
+            }
         }
-        finally { KeyInterceptor.IsSuppressed = false; }
+        finally
+        {
+            KeyInterceptor.IsSuppressed = false;
+        }
     }
 
-    /// <summary>Perform richtext expansion — RTF clipboard + Ctrl+V for Word.</summary>
-    public static void ExpandRichText(string rtfOrPath, int triggerLength)
+    public static void ExpandRichText(
+        string rtfOrPath,
+        int triggerLength,
+        AutomationTarget target,
+        CancellationToken cancellationToken = default)
     {
         KeyInterceptor.IsSuppressed = true;
         try
         {
-            Thread.Sleep(60);
-            for (int i = 0; i < triggerLength; i++)
-            {
-                SendKeyDownUp(VK_BACK);
-                Thread.Sleep(15);
-            }
-            Thread.Sleep(30);
+            target.ThrowIfNotForeground(cancellationToken);
+            EraseChars(triggerLength, target, cancellationToken);
 
-            // If trigger value is a path to .rtf file → load it
             string rtf = rtfOrPath;
             if (File.Exists(rtfOrPath) && rtfOrPath.EndsWith(".rtf", StringComparison.OrdinalIgnoreCase))
                 rtf = File.ReadAllText(rtfOrPath, System.Text.Encoding.Default);
 
-            string resolved = ResolveTokens(rtf);
-            PasteRichText(resolved);
+            string resolved = ResolveTokens(rtf, target, cancellationToken);
+            PasteRichText(resolved, target, cancellationToken);
         }
-        finally { KeyInterceptor.IsSuppressed = false; }
+        finally
+        {
+            KeyInterceptor.IsSuppressed = false;
+        }
     }
 
-    /// <summary>
-    /// Load a LISP file into AutoCAD by typing (load "path") into the command line.
-    /// Expects a file path as trigger value (may contain {tokens}).
-    /// </summary>
-    public static void LoadLisp(string filePath, int triggerLength)
+    public static void LoadLisp(
+        string filePath,
+        int triggerLength,
+        AutomationTarget target,
+        CancellationToken cancellationToken = default)
     {
         KeyInterceptor.IsSuppressed = true;
         try
         {
-            Thread.Sleep(60);
-            for (int i = 0; i < triggerLength; i++)
-            {
-                SendKeyDownUp(VK_BACK);
-                Thread.Sleep(15);
-            }
-            Thread.Sleep(30);
+            target.ThrowIfNotForeground(cancellationToken);
+            EraseChars(triggerLength, target, cancellationToken);
 
-            string resolved = ResolveTokens(filePath);
-            // Normalize to forward slashes — AutoCAD LISP accepts both, but forward avoids escape issues
-            resolved = resolved.Replace('\\', '/');
+            string resolved = ResolveTokens(filePath, target, cancellationToken)
+                .Replace('\\', '/')
+                .Replace("\"", "\\\"");
 
-            // Escape double-quotes inside path (paranoid, but safe)
-            resolved = resolved.Replace("\"", "\\\"");
-
-            string cmd = $"(load \"{resolved}\")\n";
-            TypeUnicode(cmd);
+            TypeUnicode($"(load \"{resolved}\")\n", target, cancellationToken);
         }
-        finally { KeyInterceptor.IsSuppressed = false; }
+        finally
+        {
+            KeyInterceptor.IsSuppressed = false;
+        }
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Dynamic tokens: {date} {time} {clipboard} {year} {datetime}
-    // ═══════════════════════════════════════════════════════════════
-
-    internal static string ResolveTokens(string text)
+    internal static string ResolveTokens(
+        string text,
+        AutomationTarget target,
+        CancellationToken cancellationToken = default)
     {
-        // Custom date/time format: {datetime:HH:mm} or {datetime:yyyy-MM-dd}
-        text = Regex.Replace(text, @"\{datetime:([^}]*)\}", m =>
+        cancellationToken.ThrowIfCancellationRequested();
+
+        text = Regex.Replace(text, @"\{datetime:([^}]*)\}", match =>
         {
-            try { return DateTime.Now.ToString(m.Groups[1].Value); }
-            catch { return m.Value; }
+            cancellationToken.ThrowIfCancellationRequested();
+            try { return DateTime.Now.ToString(match.Groups[1].Value); }
+            catch { return match.Value; }
         });
 
         text = text
@@ -137,53 +122,75 @@ internal static class TextExpander
             .Replace("{year}", DateTime.Now.Year.ToString())
             .Replace("{clipboard}", ReadClipboardSafe());
 
-        // {input} or {input:Подпись} — prompt the user for free text.
-        text = Regex.Replace(text, @"\{input(?::([^}]*))?\}", m =>
+        bool prompted = false;
+        text = Regex.Replace(text, @"\{input(?::([^}]*))?\}", match =>
         {
-            string label = m.Groups[1].Success && m.Groups[1].Value.Length > 0
-                ? m.Groups[1].Value
+            cancellationToken.ThrowIfCancellationRequested();
+            target.ThrowIfNotForeground(cancellationToken);
+            prompted = true;
+            string label = match.Groups[1].Success && match.Groups[1].Value.Length > 0
+                ? match.Groups[1].Value
                 : "Введите значение:";
-            return PromptWindow.AskText(label);
+            return PromptWindow.AskText(label, cancellationToken);
         });
 
-        // {choice:a|b|c} — let the user pick one option.
-        text = Regex.Replace(text, @"\{choice:([^}]*)\}", m =>
+        text = Regex.Replace(text, @"\{choice:([^}]*)\}", match =>
         {
-            var opts = m.Groups[1].Value.Split('|',
+            cancellationToken.ThrowIfCancellationRequested();
+            prompted = true;
+            var options = match.Groups[1].Value.Split('|',
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            return opts.Length > 0 ? PromptWindow.AskChoice("Выберите:", opts) : "";
+            return options.Length > 0
+                ? PromptWindow.AskChoice("Выберите:", options, cancellationToken)
+                : "";
         });
+
+        if (prompted)
+            target.RestoreAfterPrompt(cancellationToken);
+        else
+            target.ThrowIfNotForeground(cancellationToken);
 
         return text;
     }
 
-    /// <summary>Erase characters by sending Backspace keys. Caller manages IsSuppressed.</summary>
-    public static void EraseChars(int count)
+    /// <summary>Erase characters while continuously checking cancellation and focus.</summary>
+    public static void EraseChars(
+        int count,
+        AutomationTarget target,
+        CancellationToken cancellationToken = default)
     {
-        if (count <= 0) return;
-        Thread.Sleep(60);
+        if (count <= 0)
+        {
+            target.ThrowIfNotForeground(cancellationToken);
+            return;
+        }
+
+        Delay(60, cancellationToken);
         for (int i = 0; i < count; i++)
         {
+            target.ThrowIfNotForeground(cancellationToken);
             SendKeyDownUp(VK_BACK);
-            Thread.Sleep(15);
+            Delay(15, cancellationToken);
         }
-        Thread.Sleep(30);
+        Delay(30, cancellationToken);
     }
 
-    /// <summary>
-    /// Resolve tokens and type the text, without erasing anything beforehand.
-    /// Used by macro "type" steps. The caller manages <see cref="KeyInterceptor.IsSuppressed"/>.
-    /// </summary>
-    public static void TypeText(string raw)
+    public static void TypeText(
+        string raw,
+        AutomationTarget target,
+        CancellationToken cancellationToken = default)
     {
-        string s = ResolveTokens(raw).Replace(CursorMarker, "", StringComparison.OrdinalIgnoreCase);
-        TypeUnicode(s);
+        string text = ResolveTokens(raw, target, cancellationToken)
+            .Replace(CursorMarker, "", StringComparison.OrdinalIgnoreCase);
+        TypeUnicode(text, target, cancellationToken);
     }
 
-    /// <summary>True if resolving the text will pop a modal prompt that can steal focus.</summary>
-    private static bool MayPrompt(string text) =>
-        text.Contains("{input", StringComparison.OrdinalIgnoreCase)
-        || text.Contains("{choice", StringComparison.OrdinalIgnoreCase);
+    private static void Delay(int milliseconds, CancellationToken cancellationToken)
+    {
+        if (milliseconds <= 0) return;
+        if (cancellationToken.WaitHandle.WaitOne(milliseconds))
+            cancellationToken.ThrowIfCancellationRequested();
+    }
 
     private static string ReadClipboardSafe()
     {
@@ -196,22 +203,21 @@ internal static class TextExpander
         catch { return ""; }
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Unicode keystroke injection
-    // ═══════════════════════════════════════════════════════════════
-
-    private static void TypeUnicode(string text)
+    private static void TypeUnicode(
+        string text,
+        AutomationTarget target,
+        CancellationToken cancellationToken)
     {
-        var inputs = new List<NativeMethods.INPUT>(text.Length * 2);
+        var inputs = new List<NativeMethods.INPUT>(128);
 
         for (int i = 0; i < text.Length; i++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             char c = text[i];
 
-            // Real newline OR literal \n → Enter key
             if (c == '\n' || (c == '\\' && i + 1 < text.Length && text[i + 1] == 'n'))
             {
-                if (c == '\\') i++; // skip 'n'
+                if (c == '\\') i++;
                 uint scan = NativeMethods.MapVirtualKey(VK_RETURN, NativeMethods.MAPVK_VK_TO_VSC);
                 inputs.Add(MakeVkInput(VK_RETURN, scan, 0));
                 inputs.Add(MakeVkInput(VK_RETURN, scan, NativeMethods.KEYEVENTF_KEYUP));
@@ -221,121 +227,137 @@ internal static class TextExpander
                 inputs.Add(MakeUnicodeInput(c, isUp: false));
                 inputs.Add(MakeUnicodeInput(c, isUp: true));
             }
+
+            if (inputs.Count >= 128)
+                FlushInputs(inputs, target, cancellationToken);
         }
 
-        if (inputs.Count > 0)
-            NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
+        FlushInputs(inputs, target, cancellationToken);
     }
 
-    private static NativeMethods.INPUT MakeUnicodeInput(char c, bool isUp)
+    private static void FlushInputs(
+        List<NativeMethods.INPUT> inputs,
+        AutomationTarget target,
+        CancellationToken cancellationToken)
     {
-        return new NativeMethods.INPUT
-        {
-            type = NativeMethods.INPUT_KEYBOARD,
-            ki = new NativeMethods.KEYBDINPUT
-            {
-                wVk = 0,
-                wScan = (ushort)c,
-                dwFlags = NativeMethods.KEYEVENTF_UNICODE | (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u),
-                time = 0,
-                dwExtraInfo = IntPtr.Zero
-            }
-        };
+        if (inputs.Count == 0) return;
+        target.ThrowIfNotForeground(cancellationToken);
+        InputInjection.Send(inputs);
+        inputs.Clear();
     }
 
-    private static NativeMethods.INPUT MakeVkInput(int vk, uint scan, uint flags)
+    private static NativeMethods.INPUT MakeUnicodeInput(char c, bool isUp) => new()
     {
-        return new NativeMethods.INPUT
+        type = NativeMethods.INPUT_KEYBOARD,
+        ki = new NativeMethods.KEYBDINPUT
         {
-            type = NativeMethods.INPUT_KEYBOARD,
-            ki = new NativeMethods.KEYBDINPUT
-            {
-                wVk = (ushort)vk,
-                wScan = (ushort)scan,
-                dwFlags = flags,
-                time = 0,
-                dwExtraInfo = IntPtr.Zero
-            }
-        };
-    }
+            wVk = 0,
+            wScan = c,
+            dwFlags = NativeMethods.KEYEVENTF_UNICODE | (isUp ? NativeMethods.KEYEVENTF_KEYUP : 0u),
+            time = 0,
+            dwExtraInfo = IntPtr.Zero
+        }
+    };
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Shared: virtual key down+up
-    // ═══════════════════════════════════════════════════════════════
+    private static NativeMethods.INPUT MakeVkInput(int vk, uint scan, uint flags) => new()
+    {
+        type = NativeMethods.INPUT_KEYBOARD,
+        ki = new NativeMethods.KEYBDINPUT
+        {
+            wVk = (ushort)vk,
+            wScan = (ushort)scan,
+            dwFlags = flags,
+            time = 0,
+            dwExtraInfo = IntPtr.Zero
+        }
+    };
 
     private static void SendKeyDownUp(int vkCode)
     {
         uint scanCode = NativeMethods.MapVirtualKey((uint)vkCode, NativeMethods.MAPVK_VK_TO_VSC);
-        // Arrow keys (0x25–0x28) are extended keys; keep the existing VK_BACK flag too.
         bool extended = vkCode == VK_BACK || (vkCode >= 0x25 && vkCode <= 0x28);
         uint flags = extended ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u;
 
-        var inputs = new[]
+        InputInjection.Send(new[]
         {
-            new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)vkCode, wScan = (ushort)scanCode, dwFlags = flags, time = 0, dwExtraInfo = IntPtr.Zero } },
-            new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)vkCode, wScan = (ushort)scanCode, dwFlags = flags | NativeMethods.KEYEVENTF_KEYUP, time = 0, dwExtraInfo = IntPtr.Zero } }
-        };
-
-        NativeMethods.SendInput(2, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+            MakeVkInput(vkCode, scanCode, flags),
+            MakeVkInput(vkCode, scanCode, flags | NativeMethods.KEYEVENTF_KEYUP)
+        });
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    //  Rich text paste (for Word, Outlook — formatted templates)
-    // ═══════════════════════════════════════════════════════════════
-
-    private static void PasteRichText(string rtf)
+    private static void PasteRichText(
+        string rtf,
+        AutomationTarget target,
+        CancellationToken cancellationToken)
     {
-        string plain = StripRtf(rtf);
-        LogToFile($"[RTF] len={rtf.Length} plain={plain.Length}");
+        target.ThrowIfNotForeground(cancellationToken);
+        ClipboardSnapshot snapshot = ClipboardSnapshot.Capture();
 
-        string? saved = null;
-        try { if (System.Windows.Forms.Clipboard.ContainsText()) saved = System.Windows.Forms.Clipboard.GetText(); }
-        catch { }
-
-        // Try .NET clipboard with retry
-        bool written = false;
         try
         {
-            var dataObj = new System.Windows.Forms.DataObject();
-            dataObj.SetData(System.Windows.Forms.DataFormats.Rtf, rtf);
-            dataObj.SetData(System.Windows.Forms.DataFormats.Text, plain);
-            System.Windows.Forms.Clipboard.SetDataObject(dataObj, true, 10, 50);
-            written = true;
-            LogToFile("[RTF] .NET clipboard OK");
-        }
-        catch (Exception ex) { LogToFile($"[RTF] .NET FAIL: {ex.Message}"); }
+            string plain = StripRtf(rtf);
+            AppLog.Diagnostic($"RTF paste prepared: rtf={rtf.Length}; plain={plain.Length}");
 
-        if (!written)
-        {
-            uint cfRtf = NativeMethods.RegisterClipboardFormat("Rich Text Format");
-            for (int a = 0; a < 10; a++)
+            bool written = false;
+            try
             {
-                if (NativeMethods.OpenClipboard(IntPtr.Zero))
-                {
-                    try
-                    {
-                        NativeMethods.EmptyClipboard();
-                        IntPtr hRtf = AllocString(rtf, true);
-                        IntPtr hText = AllocString(plain, false);
-                        if (hRtf != IntPtr.Zero) NativeMethods.SetClipboardData(cfRtf, hRtf);
-                        if (hText != IntPtr.Zero) NativeMethods.SetClipboardData(NativeMethods.CF_UNICODETEXT, hText);
-                        written = true; LogToFile("[RTF] WinAPI OK");
-                    }
-                    finally { NativeMethods.CloseClipboard(); }
-                    break;
-                }
+                var dataObject = new System.Windows.Forms.DataObject();
+                dataObject.SetData(System.Windows.Forms.DataFormats.Rtf, rtf);
+                dataObject.SetData(System.Windows.Forms.DataFormats.Text, plain);
+                System.Windows.Forms.Clipboard.SetDataObject(dataObject, true, 10, 50);
+                written = true;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Diagnostic($"RTF clipboard .NET path failed: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            if (!written)
+                written = TryWriteRtfWithWinApi(rtf, plain);
+
+            if (!written)
+                throw new InvalidOperationException("Не удалось подготовить форматированный текст в буфере обмена.");
+
+            Delay(50, cancellationToken);
+            target.ThrowIfNotForeground(cancellationToken);
+            SendCtrlV();
+            Delay(150, cancellationToken);
+        }
+        finally
+        {
+            snapshot.Restore();
+        }
+    }
+
+    private static bool TryWriteRtfWithWinApi(string rtf, string plain)
+    {
+        uint cfRtf = NativeMethods.RegisterClipboardFormat("Rich Text Format");
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            if (!NativeMethods.OpenClipboard(IntPtr.Zero))
+            {
                 Thread.Sleep(3);
+                continue;
+            }
+
+            try
+            {
+                if (!NativeMethods.EmptyClipboard())
+                    return false;
+
+                IntPtr hRtf = AllocString(rtf, asAnsi: true);
+                IntPtr hText = AllocString(plain, asAnsi: false);
+                bool rtfSet = hRtf != IntPtr.Zero && NativeMethods.SetClipboardData(cfRtf, hRtf) != IntPtr.Zero;
+                bool textSet = hText != IntPtr.Zero && NativeMethods.SetClipboardData(NativeMethods.CF_UNICODETEXT, hText) != IntPtr.Zero;
+                return rtfSet && textSet;
+            }
+            finally
+            {
+                NativeMethods.CloseClipboard();
             }
         }
 
-        if (!written) { LogToFile("[RTF] ABORT"); return; }
-
-        Thread.Sleep(50);
-        SendCtrlV();
-        LogToFile("[RTF] Ctrl+V sent");
-        Thread.Sleep(150);
-
-        if (saved != null) { try { System.Windows.Forms.Clipboard.SetText(saved); } catch { } }
+        return false;
     }
 
     private static IntPtr AllocString(string text, bool asAnsi)
@@ -344,30 +366,28 @@ internal static class TextExpander
         byte[] bytes = asAnsi
             ? System.Text.Encoding.Default.GetBytes(text)
             : System.Text.Encoding.Unicode.GetBytes(text);
-        int size = bytes.Length + (asAnsi ? 1 : 2); // null terminator
-        IntPtr hMem = NativeMethods.GlobalAlloc(0x0002, (UIntPtr)size);
-        if (hMem == IntPtr.Zero) return IntPtr.Zero;
-        IntPtr ptr = NativeMethods.GlobalLock(hMem);
-        if (ptr != IntPtr.Zero) { Marshal.Copy(bytes, 0, ptr, bytes.Length); NativeMethods.GlobalUnlock(hMem); }
-        return hMem;
+        int size = bytes.Length + (asAnsi ? 1 : 2);
+        IntPtr memory = NativeMethods.GlobalAlloc(0x0002, (UIntPtr)size);
+        if (memory == IntPtr.Zero) return IntPtr.Zero;
+        IntPtr pointer = NativeMethods.GlobalLock(memory);
+        if (pointer != IntPtr.Zero)
+        {
+            Marshal.Copy(bytes, 0, pointer, bytes.Length);
+            NativeMethods.GlobalUnlock(memory);
+        }
+        return memory;
     }
 
-    /// <summary>Strip RTF tags, return plain text.</summary>
     private static string StripRtf(string rtf)
     {
-        // Remove RTF control words and groups
-        var sb = new System.Text.StringBuilder();
+        var builder = new System.Text.StringBuilder();
         bool inTag = false;
         int groupDepth = 0;
         for (int i = 0; i < rtf.Length; i++)
         {
             char c = rtf[i];
             if (c == '{') { groupDepth++; continue; }
-            if (c == '}')
-            {
-                groupDepth--;
-                continue;
-            }
+            if (c == '}') { groupDepth--; continue; }
             if (c == '\\' && i + 1 < rtf.Length && char.IsLetter(rtf[i + 1]))
             {
                 inTag = true;
@@ -380,33 +400,32 @@ internal static class TextExpander
             }
             if (c == '\\' && i + 1 < rtf.Length && "\\{}".Contains(rtf[i + 1]))
             {
-                sb.Append(rtf[++i]);
+                builder.Append(rtf[++i]);
                 continue;
             }
             if (c == '\\' && i + 1 < rtf.Length && rtf[i + 1] == 'n')
             {
-                sb.Append('\n'); i++;
+                builder.Append('\n');
+                i++;
                 continue;
             }
-            if (groupDepth > 0 && !inTag) sb.Append(c);
+            if (groupDepth > 0 && !inTag) builder.Append(c);
         }
-        return sb.ToString().Trim();
+        return builder.ToString().Trim();
     }
 
     private static void SendCtrlV()
     {
-        const int VK_CTRL = 0x11, VK_V = 0x56;
-        uint cs = NativeMethods.MapVirtualKey(VK_CTRL, NativeMethods.MAPVK_VK_TO_VSC);
-        uint vs = NativeMethods.MapVirtualKey(VK_V, NativeMethods.MAPVK_VK_TO_VSC);
-        var inputs = new[]
+        const int VK_CTRL = 0x11;
+        const int VK_V = 0x56;
+        uint ctrlScan = NativeMethods.MapVirtualKey(VK_CTRL, NativeMethods.MAPVK_VK_TO_VSC);
+        uint vScan = NativeMethods.MapVirtualKey(VK_V, NativeMethods.MAPVK_VK_TO_VSC);
+        InputInjection.Send(new[]
         {
-            new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new NativeMethods.KEYBDINPUT { wVk = VK_CTRL, wScan = (ushort)cs, dwFlags = 0, time = 0, dwExtraInfo = IntPtr.Zero } },
-            new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new NativeMethods.KEYBDINPUT { wVk = VK_V, wScan = (ushort)vs, dwFlags = 0, time = 0, dwExtraInfo = IntPtr.Zero } },
-            new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new NativeMethods.KEYBDINPUT { wVk = VK_V, wScan = (ushort)vs, dwFlags = NativeMethods.KEYEVENTF_KEYUP, time = 0, dwExtraInfo = IntPtr.Zero } },
-            new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD, ki = new NativeMethods.KEYBDINPUT { wVk = VK_CTRL, wScan = (ushort)cs, dwFlags = NativeMethods.KEYEVENTF_KEYUP, time = 0, dwExtraInfo = IntPtr.Zero } },
-        };
-        NativeMethods.SendInput(4, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+            MakeVkInput(VK_CTRL, ctrlScan, 0),
+            MakeVkInput(VK_V, vScan, 0),
+            MakeVkInput(VK_V, vScan, NativeMethods.KEYEVENTF_KEYUP),
+            MakeVkInput(VK_CTRL, ctrlScan, NativeMethods.KEYEVENTF_KEYUP)
+        });
     }
-
-    private static void LogToFile(string message) => Core.AppLog.Write(message);
 }
