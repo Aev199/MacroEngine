@@ -10,6 +10,8 @@ internal static class AppPaths
     private static readonly string InstallDirectory = AppDomain.CurrentDomain.BaseDirectory;
     private static readonly bool Portable = File.Exists(Path.Combine(InstallDirectory, ".portable"));
 
+    public static string ApplicationDirectory => InstallDirectory;
+
     public static string RootDirectory { get; } = Portable
         ? InstallDirectory
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MacroEngine");
