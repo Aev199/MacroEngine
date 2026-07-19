@@ -16,7 +16,7 @@ internal static class InputInjection
             array,
             Marshal.SizeOf<NativeMethods.INPUT>());
 
-        if (sent != array.Length)
+        if (sent != (uint)array.Length)
         {
             throw new InvalidOperationException(
                 "Windows заблокировала эмуляцию ввода. Возможно, целевое приложение запущено от администратора. " +
