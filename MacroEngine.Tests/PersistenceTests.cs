@@ -1,4 +1,5 @@
 using MacroEngine.Core;
+using Xunit;
 
 namespace MacroEngine.Tests;
 
