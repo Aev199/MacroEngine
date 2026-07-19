@@ -14,9 +14,7 @@ internal static class ScriptRunner
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        string fileName;
-        string arguments;
-        SplitCommand(command, out fileName, out arguments);
+        SplitCommand(command, out string fileName, out string arguments);
 
         var psi = new ProcessStartInfo
         {
@@ -55,7 +53,7 @@ internal static class ScriptRunner
             }
         }
 
-        process.WaitForExit(); // allow asynchronous output readers to flush
+        process.WaitForExit();
 
         AppLog.Write($"Script completed with exit code {process.ExitCode}");
         if (stdout.Length > 0)
@@ -67,31 +65,8 @@ internal static class ScriptRunner
             throw new InvalidOperationException($"Script exited with code {process.ExitCode}.");
     }
 
-    internal static void SplitCommand(string command, out string fileName, out string arguments)
-    {
-        if (command.StartsWith('"'))
-        {
-            int endQuote = command.IndexOf('"', 1);
-            if (endQuote > 1)
-            {
-                fileName = command[1..endQuote];
-                arguments = command[(endQuote + 1)..].Trim();
-                return;
-            }
-        }
-
-        int spaceIndex = command.IndexOf(' ');
-        if (spaceIndex > 0)
-        {
-            fileName = command[..spaceIndex];
-            arguments = command[(spaceIndex + 1)..].Trim();
-        }
-        else
-        {
-            fileName = command.Trim('"');
-            arguments = "";
-        }
-    }
+    internal static void SplitCommand(string command, out string fileName, out string arguments) =>
+        CommandLineParser.Split(command, out fileName, out arguments);
 
     private static void KillProcess(Process process)
     {
