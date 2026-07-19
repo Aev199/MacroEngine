@@ -39,6 +39,12 @@ internal static class AppPaths
         // from the config templates shipped beside the executable.
         CopyIfMissing(Path.Combine(InstallDirectory, "config", "triggers.json"), TriggersFile);
         CopyIfMissing(Path.Combine(InstallDirectory, "config", "macros.json"), MacrosFile);
+
+        // Versions before the privacy hardening release wrote every typed key to
+        // these legacy files. They are diagnostic artefacts, not user data, and
+        // should not remain on disk after an upgrade.
+        DeleteLegacyLog(Path.Combine(InstallDirectory, "macroengine.log"));
+        DeleteLegacyLog(Path.Combine(InstallDirectory, "macroengine.log.1"));
     }
 
     private static void CopyIfMissing(string source, string destination)
@@ -53,6 +59,18 @@ internal static class AppPaths
         catch (IOException) when (File.Exists(destination))
         {
             // Another instance or startup path won the race.
+        }
+    }
+
+    private static void DeleteLegacyLog(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            // A locked legacy log is harmless; do not block application startup.
         }
     }
 }
