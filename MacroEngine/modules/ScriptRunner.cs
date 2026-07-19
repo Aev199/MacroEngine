@@ -12,57 +12,65 @@ internal static class ScriptRunner
         string triggerName,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        SplitCommand(command, out string fileName, out string arguments);
-
-        var psi = new ProcessStartInfo
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
+        KeyInterceptor.IsSuppressed = true;
+        try
         {
-            FileName = fileName,
-            Arguments = arguments,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = Path.GetDirectoryName(fileName) ?? ""
-        };
+            cancellationToken.ThrowIfCancellationRequested();
+            SplitCommand(command, out string fileName, out string arguments);
 
-        using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException("The script process could not be started.");
-
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderr.AppendLine(e.Data); };
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        DateTime deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!process.WaitForExit(100))
-        {
-            if (cancellationToken.IsCancellationRequested)
+            var psi = new ProcessStartInfo
             {
-                KillProcess(process);
-                cancellationToken.ThrowIfCancellationRequested();
+                FileName = fileName,
+                Arguments = arguments,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = Path.GetDirectoryName(fileName) ?? ""
+            };
+
+            using var process = Process.Start(psi)
+                ?? throw new InvalidOperationException("The script process could not be started.");
+
+            var stdout = new StringBuilder();
+            var stderr = new StringBuilder();
+            process.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
+            process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderr.AppendLine(e.Data); };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!process.WaitForExit(100))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    KillProcess(process);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                if (DateTime.UtcNow >= deadline)
+                {
+                    KillProcess(process);
+                    throw new TimeoutException("Script execution exceeded 30 seconds.");
+                }
             }
 
-            if (DateTime.UtcNow >= deadline)
-            {
-                KillProcess(process);
-                throw new TimeoutException("Script execution exceeded 30 seconds.");
-            }
+            process.WaitForExit();
+
+            AppLog.Write($"Script completed with exit code {process.ExitCode}");
+            if (stdout.Length > 0)
+                AppLog.Diagnostic("Script stdout: " + Truncate(stdout.ToString().Trim(), 500));
+            if (stderr.Length > 0)
+                AppLog.Diagnostic("Script stderr: " + Truncate(stderr.ToString().Trim(), 500));
+
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException($"Script exited with code {process.ExitCode}.");
         }
-
-        process.WaitForExit();
-
-        AppLog.Write($"Script completed with exit code {process.ExitCode}");
-        if (stdout.Length > 0)
-            AppLog.Diagnostic("Script stdout: " + Truncate(stdout.ToString().Trim(), 500));
-        if (stderr.Length > 0)
-            AppLog.Diagnostic("Script stderr: " + Truncate(stderr.ToString().Trim(), 500));
-
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"Script exited with code {process.ExitCode}.");
+        finally
+        {
+            KeyInterceptor.IsSuppressed = previousSuppression;
+        }
     }
 
     internal static void SplitCommand(string command, out string fileName, out string arguments) =>
