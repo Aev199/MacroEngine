@@ -1,40 +1,136 @@
 # MacroEngine
 
-MacroEngine is a tray-resident Windows automation utility for text expansion, application-aware shortcuts, leader key sequences, and reusable multi-step macros.
+MacroEngine — локальная Windows-утилита для текстовых подстановок, контекстных сочетаний клавиш, лидер-комбинаций и последовательных макросов.
 
-## Features
+Программа работает из системного трея и не требует облачного аккаунта. Текущая версия предназначена для личного beta-использования и ограниченного тестирования знакомыми пользователями.
 
-- text triggers with application context filters;
-- direct global shortcuts and leader chords;
-- dynamic tokens such as `{date}`, `{time}`, `{clipboard}`, `{input:...}`, `{choice:...}` and `{cursor}`;
-- text, rich text, LISP, script, open, launch and named macro actions;
-- serialized execution so keyboard, mouse and focus operations cannot interleave;
-- emergency cancellation from the tray menu;
-- automatic config reload and last-known-good backups.
+## Возможности
 
-## Requirements
+- текстовые триггеры с фильтрацией по активному приложению и окну;
+- прямые глобальные сочетания клавиш;
+- лидер-комбинации из 2–3 модификаторов и короткой последовательности;
+- токены `{date}`, `{time}`, `{datetime:...}`, `{clipboard}`, `{input:...}`, `{choice:...}` и `{cursor}`;
+- действия `text`, `richtext`, `lisp`, `script`, `open`, `launch` и `macro`;
+- именованные многошаговые макросы;
+- аварийная остановка из меню трея;
+- автоматическая перезагрузка конфигурации;
+- атомарное сохранение JSON и last-known-good backup;
+- встроенные справка, сведения о версии и диагностическая сводка.
 
-- Windows 10 or Windows 11 x64;
-- .NET is not required for the self-contained release artifact.
+## Системные требования
 
-## Build
+- Windows 10 или Windows 11 x64;
+- для self-contained сборки отдельная установка .NET не требуется.
 
-```powershell
-dotnet restore MacroEngine.Tests/MacroEngine.Tests.csproj
-dotnet test MacroEngine.Tests/MacroEngine.Tests.csproj -c Release
-dotnet publish MacroEngine/MacroEngine.csproj `
-  -c Release `
-  -r win-x64 `
-  --self-contained true `
-  -p:PublishSingleFile=true `
-  -o artifacts/win-x64
+## Первый запуск
+
+После запуска MacroEngine появляется в системном трее.
+
+- левый клик по иконке открывает настройки;
+- правый клик открывает меню управления;
+- при первом запуске автоматически открывается встроенная справка.
+
+В меню трея доступны запуск и остановка движка, отмена текущего действия, настройки, справка, папка данных, окно «О программе», автозапуск и диагностическое логирование.
+
+## Триггеры
+
+### Текст
+
+Срабатывает после набора последовательности символов.
+
+```text
+!mail  →  name@example.com
+!date  →  {date}
+!sig   →  С уважением,\nИмя
 ```
 
-GitHub Actions runs the same test, build and publish sequence on `windows-latest`.
+### Шорткат
 
-## User data
+Прямое сочетание вида `Ctrl+Shift+K`, `Alt+F8` или отдельная F-клавиша.
 
-By default mutable files are stored outside the application directory:
+Системные сочетания Windows не разрешается назначать, чтобы MacroEngine не перехватывал критичные команды ОС.
+
+### Лидер
+
+Удерживаемый аккорд из двух или трёх модификаторов, после которого вводится короткая последовательность.
+
+Пример:
+
+```text
+Лидер: Ctrl+Alt
+Триггер: gm
+```
+
+## Контексты
+
+Поле «Контекст» ограничивает область действия триггера.
+
+```text
+*                 работает везде
+acad              совпадение с AutoCAD
+acad,revit        AutoCAD ИЛИ Revit
+*,!browser        везде, кроме окон с совпадением browser
+```
+
+Сопоставление выполняется по имени процесса, классу и заголовку активного окна без учёта регистра.
+
+## Токены
+
+```text
+{date}                         19.07.2026
+{time}                         21:30
+{datetime}                     19.07.2026 21:30
+{datetime:yyyy-MM-dd}          2026-07-19
+{year}                         2026
+{clipboard}                    текст из буфера обмена
+{input:Номер проекта}          запрос свободного текста
+{choice:Да|Нет|Не применимо}   выбор из списка
+{cursor}                       позиция курсора после вставки
+```
+
+При использовании `{input}` или `{choice}` MacroEngine временно показывает собственное окно. Фокус возвращается только в исходное приложение и только если пользователь не переключился в другое окно.
+
+## Действия
+
+- `text` — обычная Unicode-подстановка;
+- `richtext` — RTF-вставка через clipboard с сохранением и восстановлением его исходных форматов;
+- `lisp` — загрузка LISP-файла в AutoCAD;
+- `script` — запуск внешней команды с ожиданием результата;
+- `open` — открыть файл или папку;
+- `launch` — запустить приложение с аргументами;
+- `macro` — выполнить именованный многошаговый макрос.
+
+## Макросы
+
+Поддерживаемые шаги:
+
+```text
+type текст для ввода
+key Ctrl+S
+sleep 500
+click 120,300
+dclick 120,300
+rclick 120,300
+run "C:\Program Files\Tool\tool.exe" --argument
+```
+
+Пустые строки и строки, начинающиеся с `#`, игнорируются.
+
+Если шаг не распознан или завершается ошибкой, макрос останавливается. Следующие шаги не выполняются в неопределённом состоянии.
+
+## Безопасность выполнения
+
+MacroEngine выполняет не более одного действия одновременно.
+
+Если движок уже занят, новый запуск отклоняется и не остаётся в скрытой очереди. Это исключает ситуацию, когда старое действие неожиданно выполняется позднее в другом окне.
+
+Каждое действие привязано к точному HWND и PID окна, в котором сработал триггер. При смене активного окна ввод прекращается.
+
+Результат Windows `SendInput` проверяется. Если ввод заблокирован, например из-за приложения с повышенными правами, MacroEngine показывает ошибку вместо молчаливого частичного выполнения.
+
+## Хранение данных
+
+По умолчанию изменяемые файлы находятся здесь:
 
 ```text
 %LocalAppData%\MacroEngine\
@@ -49,42 +145,56 @@ By default mutable files are stored outside the application directory:
   state\
 ```
 
-On the first launch after upgrading from an older portable build, existing `config\triggers.json` and `config\macros.json` beside the executable are copied to the new location if no user config exists there yet.
+Пути можно посмотреть и открыть в окне **О программе**.
 
-To keep all data beside the executable, create an empty file named `.portable` next to `MacroEngine.exe` before the first launch.
+Чтобы хранить все данные рядом с EXE, создайте пустой файл `.portable` рядом с `MacroEngine.exe` до первого запуска.
 
-## Safe persistence and recovery
+При обновлении старой portable-сборки конфиги рядом с EXE копируются в `%LocalAppData%\MacroEngine`, только если в новом месте ещё нет пользовательских файлов.
 
-Configuration is serialized and validated before replacing the active file. Writes use a temporary file and retain one `.bak` last-known-good copy. If the main JSON file becomes invalid, MacroEngine attempts to restore the backup automatically.
+## Сохранение и восстановление
 
-A failed save is shown in the settings window. The window remains open and retains its unsaved state.
+Перед заменой активного файла JSON сериализуется и проверяется. Запись выполняется через временный файл со сбросом на диск.
 
-## Privacy
+При повторном сохранении сохраняется один `.bak` с последней корректной версией. Если основной JSON повреждён, MacroEngine пытается загрузить backup и восстановить рабочий файл, не заменяя исправный `.bak` повреждённой копией.
 
-Normal logging does **not** record typed characters, trigger replacement values, clipboard contents, commands, or macro scripts.
+При кратковременно недописанном файле после сохранения внешним редактором выполняются повторные попытки чтения.
 
-Detailed keyboard diagnostics are disabled by default. They can be explicitly enabled from the tray menu under **Диагностическое логирование**. This mode can include virtual-key information, keyboard layout and active-window context, so it should only be used temporarily while troubleshooting.
+## Приватность
 
-Legacy `macroengine.log` files beside the executable, created by versions that logged every key, are removed during migration to the hardened storage layout.
+Обычный журнал **не записывает**:
 
-## Macro execution
+- введённые символы;
+- значения подстановок;
+- содержимое clipboard;
+- команды scripts и launch;
+- тексты макросов.
 
-All actions are placed in a bounded queue and executed one at a time on a dedicated STA thread. Use **Остановить текущее действие** in the tray menu to cancel the running macro or script and discard pending actions.
+Подробное диагностическое логирование выключено по умолчанию. Его можно временно включить в меню трея. Диагностический режим может содержать виртуальные коды клавиш, раскладку и сведения об активном окне.
 
-Macro steps:
+Кнопка **Копировать диагностику** в окне «О программе» создаёт сводку только с версией, ОС, режимом хранения и путями к служебным файлам. Пользовательские триггеры и значения туда не включаются.
 
-```text
-type text to enter
-key Ctrl+S
-sleep 500
-click 120,300
-dclick 120,300
-rclick 120,300
-run "C:\Program Files\Tool\tool.exe" --argument
+## Ограничения
+
+- MacroEngine не может отправлять ввод в приложение с более высоким уровнем прав; запустите оба приложения с одинаковыми правами;
+- глобальный hook, RTF-вставка и специфические CAD/Midas-сценарии требуют ручной проверки на целевом компьютере;
+- приложение пока распространяется как beta-сборка без установщика и автоматического обновления;
+- перед передачей другому человеку рекомендуется выполнить Windows smoke-test основных сценариев.
+
+## Сборка
+
+```powershell
+dotnet restore MacroEngine.Tests/MacroEngine.Tests.csproj
+dotnet test MacroEngine.Tests/MacroEngine.Tests.csproj -c Release
+dotnet publish MacroEngine/MacroEngine.csproj `
+  -c Release `
+  -r win-x64 `
+  --self-contained true `
+  -p:PublishSingleFile=true `
+  -o artifacts/win-x64
 ```
 
-Blank lines and lines beginning with `#` are ignored.
+GitHub Actions выполняет tests, Release build и publish на Windows.
 
-## Development status
+## Статус
 
-The project is suitable for personal beta use. Automated tests cover atomic persistence, backup recovery, command parsing and virtual-key mapping. Interactive Windows smoke testing is still recommended for keyboard hooks, tray behavior, prompts, rich-text paste and application-specific automation.
+Версия `0.5.0-beta.1` пригодна для личного использования и контролируемого тестирования. Перед более широким распространением остаются установщик, подпись бинарников, обновления и полноценная матрица ручных Windows-тестов.
