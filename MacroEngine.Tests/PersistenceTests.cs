@@ -24,7 +24,7 @@ public sealed class PersistenceTests : IDisposable
     }
 
     [Fact]
-    public void TriggerConfig_CorruptMainFileRecoversBackup()
+    public void TriggerConfig_CorruptMainFileRecoversWithoutCorruptingBackup()
     {
         string path = Path.Combine(_directory, "triggers.json");
         using var config = new TriggerConfig(path);
@@ -47,6 +47,8 @@ public sealed class PersistenceTests : IDisposable
         Assert.Single(recovered);
         Assert.Equal("!first", recovered[0].Trigger);
         Assert.Equal("!first", AtomicJsonFile.Load<List<TriggerEntry>>(path)[0].Trigger);
+        Assert.Equal("!first",
+            AtomicJsonFile.Load<List<TriggerEntry>>(AtomicJsonFile.BackupPath(path))[0].Trigger);
     }
 
     [Fact]
