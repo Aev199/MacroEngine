@@ -9,7 +9,8 @@ namespace MacroEngine.UI;
 /// <summary>
 /// Small prompt used to resolve {input:…} and {choice:…} tokens during expansion.
 /// Calls are marshalled from the expansion worker onto Avalonia's UI thread.
-/// The prompt closes after 60 seconds without user activity.
+/// The prompt closes after 60 seconds without user activity or immediately when
+/// the running automation is cancelled.
 /// </summary>
 internal sealed class PromptWindow : Window
 {
@@ -20,11 +21,12 @@ internal sealed class PromptWindow : Window
     private readonly TextBox? _text;
     private readonly ComboBox? _combo;
     private readonly DispatcherTimer _countdown;
+    private readonly CancellationTokenRegistration _cancellationRegistration;
 
     private int _remaining = TimeoutSeconds;
     private bool _completed;
 
-    private PromptWindow(string label, string[]? choices)
+    private PromptWindow(string label, string[]? choices, CancellationToken cancellationToken)
     {
         Width = 380;
         SizeToContent = SizeToContent.Height;
@@ -94,6 +96,9 @@ internal sealed class PromptWindow : Window
             UpdateTitle();
         };
 
+        _cancellationRegistration = cancellationToken.Register(() =>
+            Dispatcher.UIThread.Post(() => CancelFromToken(cancellationToken)));
+
         ResetCountdown();
         _countdown.Start();
 
@@ -119,22 +124,44 @@ internal sealed class PromptWindow : Window
 
         _completed = true;
         _countdown.Stop();
+        _cancellationRegistration.Dispose();
         _result.TrySetResult(value);
         Close();
     }
 
-    public static string AskText(string label) => Run(label, null);
-
-    public static string AskChoice(string label, string[] choices) => Run(label, choices);
-
-    private static string Run(string label, string[]? choices)
+    private void CancelFromToken(CancellationToken cancellationToken)
     {
+        if (_completed) return;
+
+        _completed = true;
+        _countdown.Stop();
+        _cancellationRegistration.Dispose();
+        _result.TrySetCanceled(cancellationToken);
+        Close();
+    }
+
+    public static string AskText(string label, CancellationToken cancellationToken = default) =>
+        Run(label, null, cancellationToken);
+
+    public static string AskChoice(
+        string label,
+        string[] choices,
+        CancellationToken cancellationToken = default) =>
+        Run(label, choices, cancellationToken);
+
+    private static string Run(
+        string label,
+        string[]? choices,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (Dispatcher.UIThread.CheckAccess())
             throw new InvalidOperationException("PromptWindow must not block the UI thread.");
 
         var operation = Dispatcher.UIThread.InvokeAsync(async () =>
         {
-            var window = new PromptWindow(label, choices);
+            var window = new PromptWindow(label, choices, cancellationToken);
             window.Show();
             window.Activate();
             return await window._result.Task;
