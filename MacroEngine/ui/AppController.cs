@@ -18,6 +18,7 @@ internal sealed class AppController : IDisposable
     private readonly NativeMenuItem _startStopItem;
     private readonly NativeMenuItem _statusItem;
     private readonly NativeMenuItem _autostartItem;
+    private readonly NativeMenuItem _diagnosticItem;
     private readonly NativeMenuItem _cancelItem;
 
     private readonly KeyInterceptor _interceptor;
@@ -79,6 +80,13 @@ internal sealed class AppController : IDisposable
         };
         _autostartItem.Click += (_, _) => ToggleAutostart();
 
+        _diagnosticItem = new NativeMenuItem("Диагностическое логирование")
+        {
+            ToggleType = NativeMenuItemToggleType.CheckBox,
+            IsChecked = AppLog.DiagnosticEnabled
+        };
+        _diagnosticItem.Click += (_, _) => ToggleDiagnosticLogging();
+
         var quitItem = new NativeMenuItem("Выход");
         quitItem.Click += (_, _) => Quit();
 
@@ -98,6 +106,7 @@ internal sealed class AppController : IDisposable
                     settingsItem,
                     new NativeMenuItemSeparator(),
                     _autostartItem,
+                    _diagnosticItem,
                     new NativeMenuItemSeparator(),
                     quitItem
                 }
@@ -451,6 +460,32 @@ internal sealed class AppController : IDisposable
             AppLog.Write($"Autostart toggle failed: {ex.GetType().Name}: {ex.Message}");
             _autostartItem.IsChecked = Autostart.IsEnabled();
             _overlay.ShowToast($"Не удалось изменить автозапуск: {ex.Message}", 5000);
+        }
+    }
+
+    private void ToggleDiagnosticLogging()
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.StateDirectory);
+            bool enable = !File.Exists(AppPaths.DiagnosticMarker);
+            if (enable)
+                File.WriteAllText(AppPaths.DiagnosticMarker, "");
+            else
+                File.Delete(AppPaths.DiagnosticMarker);
+
+            _diagnosticItem.IsChecked = AppLog.DiagnosticEnabled;
+            AppLog.Write($"Diagnostic logging {(AppLog.DiagnosticEnabled ? "enabled" : "disabled")}");
+            _overlay.ShowToast(AppLog.DiagnosticEnabled
+                ? "Диагностическое логирование включено. Оно может содержать сведения о клавишах и окнах."
+                : "Диагностическое логирование выключено.",
+                AppLog.DiagnosticEnabled ? 6500 : 3000);
+        }
+        catch (Exception ex)
+        {
+            _diagnosticItem.IsChecked = AppLog.DiagnosticEnabled;
+            AppLog.Write($"Diagnostic logging toggle failed: {ex.GetType().Name}: {ex.Message}");
+            _overlay.ShowToast($"Не удалось изменить режим диагностики: {ex.Message}", 5000);
         }
     }
 
