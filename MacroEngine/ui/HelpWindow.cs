@@ -9,7 +9,7 @@ namespace MacroEngine.UI;
 /// <summary>Offline help backed by the README embedded in the executable.</summary>
 internal sealed class HelpWindow : Window
 {
-    public HelpWindow(Action openSettings, Action openAbout)
+    public HelpWindow(Action openAbout)
     {
         Title = $"MacroEngine {ProductInfo.DisplayVersion} — Справка";
         Width = 820;
@@ -28,18 +28,17 @@ internal sealed class HelpWindow : Window
             }
         };
 
-        var settings = new Button { Content = "Открыть настройки", Classes = { "accent" } };
-        var data = new Button { Content = "Папка данных" };
+        var data = new Button { Content = "Папка данных", Classes = { "accent" } };
         var about = new Button { Content = "О программе" };
         var close = new Button { Content = "Закрыть", IsCancel = true };
         var status = new TextBlock
         {
             Opacity = 0.7,
             VerticalAlignment = VerticalAlignment.Center,
-            TextWrapping = TextWrapping.Wrap
+            TextWrapping = TextWrapping.Wrap,
+            Text = "Настройки открываются левым кликом по иконке MacroEngine в трее."
         };
 
-        settings.Click += (_, _) => openSettings();
         about.Click += (_, _) => openAbout();
         close.Click += (_, _) => Close();
         data.Click += (_, _) => Run(status, () => ShellTools.OpenDirectory(AppPaths.RootDirectory), "Папка данных открыта.");
@@ -56,7 +55,7 @@ internal sealed class HelpWindow : Window
             Orientation = Orientation.Horizontal,
             Spacing = 8,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Children = { settings, data, about, close }
+            Children = { data, about, close }
         };
         Grid.SetColumn(buttons, 1);
         footer.Children.Add(buttons);
