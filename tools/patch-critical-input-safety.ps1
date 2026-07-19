@@ -9,175 +9,93 @@ function Replace-ExactlyOnce([string] $source, [string] $needle, [string] $repla
     return $source.Substring(0, $first) + $replacement + $source.Substring($first + $needle.Length)
 }
 
-$nativePath = 'MacroEngine/core/NativeMethods.cs'
-$native = [IO.File]::ReadAllText($nativePath)
-$nativeNeedle = @'
-    [DllImport("user32.dll")]
-    public static extern IntPtr GetForegroundWindow();
+$textPath = 'MacroEngine/modules/TextExpander.cs'
+$text = [IO.File]::ReadAllText($textPath)
+$erasePattern = '(?s)    public static void EraseChars\(.*?(?=    public static void TypeText\()'
+$eraseReplacement = @'
+    public static void EraseChars(
+        int count,
+        AutomationTarget target,
+        CancellationToken cancellationToken = default)
+    {
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
+        KeyInterceptor.IsSuppressed = true;
+        try
+        {
+            if (count <= 0)
+            {
+                target.ThrowIfNotForeground(cancellationToken);
+                return;
+            }
 
-    [DllImport("user32.dll", SetLastError = true)]
+            Delay(60, cancellationToken);
+            for (int i = 0; i < count; i++)
+            {
+                target.ThrowIfNotForeground(cancellationToken);
+                SendKeyDownUp(VK_BACK);
+                Delay(15, cancellationToken);
+            }
+            Delay(30, cancellationToken);
+        }
+        finally
+        {
+            KeyInterceptor.IsSuppressed = previousSuppression;
+        }
+    }
+
+'@
+$updated = [regex]::Replace($text, $erasePattern, $eraseReplacement, 1)
+if ($updated -eq $text) { throw 'EraseChars replacement failed' }
+[IO.File]::WriteAllText($textPath, $updated, [Text.UTF8Encoding]::new($false))
+
+$queuePath = 'MacroEngine/core/ExecutionQueue.cs'
+$queue = [IO.File]::ReadAllText($queuePath)
+$queue = Replace-ExactlyOnce $queue `
+    '    public event Action<string>? JobCancelled;' `
+    '    public event Action<string, string?>? JobCancelled;'
+$queue = Replace-ExactlyOnce $queue `
+@'
+            catch (OperationCanceledException)
+            {
+                JobCancelled?.Invoke(job.Description);
+            }
+'@.TrimEnd("`r", "`n") `
+@'
+            catch (OperationCanceledException ex)
+            {
+                JobCancelled?.Invoke(job.Description, ex.Message);
+            }
 '@.TrimEnd("`r", "`n")
-$nativeReplacement = @'
-    [DllImport("user32.dll")]
-    public static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll", SetLastError = true)]
-'@.TrimEnd("`r", "`n")
-$native = Replace-ExactlyOnce $native $nativeNeedle $nativeReplacement
-[IO.File]::WriteAllText($nativePath, $native, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($queuePath, $queue, [Text.UTF8Encoding]::new($false))
 
 $controllerPath = 'MacroEngine/ui/AppController.cs'
 $controller = [IO.File]::ReadAllText($controllerPath)
-
-$triggerPattern = '(?s)    private void OnTriggerMatched\(TriggerEntry entry\).*?(?=    private void ExecuteAction\()'
-$triggerReplacement = @'
-    private void OnTriggerMatched(TriggerEntry entry)
-    {
-        string action = string.IsNullOrWhiteSpace(entry.Action)
-            ? "text"
-            : entry.Action.Trim().ToLowerInvariant();
-        string activation = !string.IsNullOrWhiteSpace(entry.Leader)
-            ? "leader"
-            : !string.IsNullOrWhiteSpace(entry.Hotkey)
-                ? "hotkey"
-                : "text";
-        int eraseLength = activation == "text" ? entry.Trigger.Length : 0;
-        AutomationTarget target = AutomationTarget.Capture();
-
-        if (!target.IsCaptured)
-        {
-            AppLog.Write("Action rejected: foreground window could not be captured");
+$controller = Replace-ExactlyOnce $controller `
+@'
+        _executionQueue.JobCancelled += _ =>
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                _overlay.ShowToast("Не удалось определить активное окно — запуск отменён", 5000));
-            return;
-        }
-
-        AppLog.Write($"Action requested: type={action}; activation={activation}");
-
-        bool accepted = _executionQueue.TryEnqueue(action, cancellationToken =>
-        {
-            target.ThrowIfNotForeground(cancellationToken);
-            ExecuteAction(entry, action, eraseLength, target, cancellationToken);
-        });
-
-        if (!accepted)
-        {
-            AppLog.Write("Execution worker is busy; action rejected");
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                _overlay.ShowToast("MacroEngine занят — новый запуск пропущен", 4000));
-        }
-    }
-
-'@
-$updated = [regex]::Replace($controller, $triggerPattern, $triggerReplacement, 1)
-if ($updated -eq $controller) { throw 'OnTriggerMatched replacement failed' }
-$controller = $updated
-
-$executePattern = '(?s)    private void ExecuteAction\(.*?(?=    private static void OpenPath\()'
-$executeReplacement = @'
-    private void ExecuteAction(
-        TriggerEntry entry,
-        string action,
-        int eraseLength,
-        AutomationTarget target,
-        CancellationToken cancellationToken)
-    {
-        switch (action)
-        {
-            case "script":
-                TextExpander.EraseChars(eraseLength, target, cancellationToken);
-                ScriptRunner.Run(entry.Value, entry.Trigger, cancellationToken);
-                break;
-            case "richtext":
-                TextExpander.ExpandRichText(entry.Value, eraseLength, target, cancellationToken);
-                break;
-            case "lisp":
-                TextExpander.LoadLisp(entry.Value, eraseLength, target, cancellationToken);
-                break;
-            case "macro":
             {
-                string script = _macros.TryGet(entry.Value.Trim(), out var definition)
-                    ? definition.Script
-                    : entry.Value;
-                MacroRunner.Run(script, eraseLength, target, cancellationToken);
-                break;
-            }
-            case "open":
-                OpenPath(entry.Value, eraseLength, target, cancellationToken);
-                break;
-            case "launch":
-                Launch(entry.Value, eraseLength, target, cancellationToken);
-                break;
-            case "text":
-            default:
-                TextExpander.Expand(entry.Value, eraseLength, target, cancellationToken);
-                break;
-        }
-    }
-
-'@
-$updated = [regex]::Replace($controller, $executePattern, $executeReplacement, 1)
-if ($updated -eq $controller) { throw 'ExecuteAction replacement failed' }
-$controller = $updated
-
-$launchPattern = '(?s)    private static void OpenPath\(.*?(?=    private void OnConfigChanged\()'
-$launchReplacement = @'
-    private static void OpenPath(
-        string rawPath,
-        int eraseLength,
-        AutomationTarget target,
-        CancellationToken cancellationToken)
-    {
-        KeyInterceptor.IsSuppressed = true;
-        try
-        {
-            target.ThrowIfNotForeground(cancellationToken);
-            TextExpander.EraseChars(eraseLength, target, cancellationToken);
-            string path = TextExpander.ResolveTokens(rawPath, target, cancellationToken).Trim();
-            cancellationToken.ThrowIfCancellationRequested();
-            Process.Start("explorer.exe", path);
-        }
-        finally
-        {
-            KeyInterceptor.IsSuppressed = false;
-        }
-    }
-
-    private static void Launch(
-        string rawCommand,
-        int eraseLength,
-        AutomationTarget target,
-        CancellationToken cancellationToken)
-    {
-        KeyInterceptor.IsSuppressed = true;
-        try
-        {
-            target.ThrowIfNotForeground(cancellationToken);
-            TextExpander.EraseChars(eraseLength, target, cancellationToken);
-            string command = TextExpander.ResolveTokens(rawCommand, target, cancellationToken).Trim();
-            cancellationToken.ThrowIfCancellationRequested();
-
-            CommandLineParser.Split(command, out string fileName, out string arguments);
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                UseShellExecute = true
+                _cancelItem.IsEnabled = false;
+                UpdateUI();
+                _overlay.ShowToast("Текущее действие остановлено");
             });
-        }
-        finally
-        {
-            KeyInterceptor.IsSuppressed = false;
-        }
-    }
-
-'@
-$updated = [regex]::Replace($controller, $launchPattern, $launchReplacement, 1)
-if ($updated -eq $controller) { throw 'OpenPath/Launch replacement failed' }
-$controller = $updated
-
+'@.TrimEnd("`r", "`n") `
+@'
+        _executionQueue.JobCancelled += (_, reason) =>
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                _cancelItem.IsEnabled = false;
+                UpdateUI();
+                _overlay.ShowToast(
+                    string.IsNullOrWhiteSpace(reason) ? "Текущее действие остановлено" : reason,
+                    5000);
+            });
+'@.TrimEnd("`r", "`n")
 [IO.File]::WriteAllText($controllerPath, $controller, [Text.UTF8Encoding]::new($false))
+
+$testPath = 'MacroEngine.Tests/ExecutionQueueTests.cs'
+$tests = [IO.File]::ReadAllText($testPath)
+$tests = Replace-ExactlyOnce $tests `
+    '        queue.JobCancelled += _ => cancelled.Set();' `
+    '        queue.JobCancelled += (_, _) => cancelled.Set();'
+[IO.File]::WriteAllText($testPath, $tests, [Text.UTF8Encoding]::new($false))
