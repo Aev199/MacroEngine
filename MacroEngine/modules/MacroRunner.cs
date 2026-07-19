@@ -1,32 +1,27 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using MacroEngine.Core;
 
 namespace MacroEngine.Modules;
 
 /// <summary>
 /// Executes a newline-separated macro script. Jobs are serialized by
-/// <see cref="ExecutionQueue"/>; this class cooperatively supports cancellation.
+/// <see cref="ExecutionQueue"/> and remain bound to the window that triggered them.
 /// </summary>
 internal static class MacroRunner
 {
     private enum MouseButton { Left, Right }
 
-    public static void Run(string script, int eraseLen, CancellationToken cancellationToken = default)
+    public static void Run(
+        string script,
+        int eraseLen,
+        AutomationTarget target,
+        CancellationToken cancellationToken = default)
     {
         KeyInterceptor.IsSuppressed = true;
-        IntPtr target = NativeMethods.GetForegroundWindow();
         try
         {
-            Delay(60, cancellationToken);
-
-            for (int i = 0; i < eraseLen; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                SendVk(0x08);
-                Delay(15, cancellationToken);
-            }
-            if (eraseLen > 0) Delay(30, cancellationToken);
+            target.ThrowIfNotForeground(cancellationToken);
+            TextExpander.EraseChars(eraseLen, target, cancellationToken);
 
             foreach (var rawLine in script.Replace("\r", "").Split('\n'))
             {
@@ -35,7 +30,7 @@ internal static class MacroRunner
                 string line = rawLine.Trim();
                 if (line.Length == 0 || line.StartsWith('#')) continue;
 
-                if (target != IntPtr.Zero) NativeMethods.SetForegroundWindow(target);
+                target.ThrowIfNotForeground(cancellationToken);
 
                 int sp = line.IndexOf(' ');
                 string verb = (sp < 0 ? line : line[..sp]).ToLowerInvariant();
@@ -43,7 +38,7 @@ internal static class MacroRunner
 
                 try
                 {
-                    Execute(verb, arg, cancellationToken);
+                    Execute(verb, arg, target, cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -52,6 +47,7 @@ internal static class MacroRunner
                 catch (Exception ex)
                 {
                     AppLog.Write($"Macro step '{verb}' failed: {ex.GetType().Name}: {ex.Message}");
+                    throw new InvalidOperationException($"Ошибка шага макроса «{verb}»: {ex.Message}", ex);
                 }
             }
         }
@@ -61,37 +57,43 @@ internal static class MacroRunner
         }
     }
 
-    private static void Execute(string verb, string arg, CancellationToken cancellationToken)
+    private static void Execute(
+        string verb,
+        string arg,
+        AutomationTarget target,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         switch (verb)
         {
             case "type":
-                TextExpander.TypeText(arg);
+                TextExpander.TypeText(arg, target, cancellationToken);
                 break;
             case "key":
+                target.ThrowIfNotForeground(cancellationToken);
                 SendCombo(arg);
                 break;
             case "click":
-                MouseClick(arg, MouseButton.Left, doubleClick: false, cancellationToken);
+                MouseClick(arg, MouseButton.Left, doubleClick: false, target, cancellationToken);
                 break;
             case "dclick":
-                MouseClick(arg, MouseButton.Left, doubleClick: true, cancellationToken);
+                MouseClick(arg, MouseButton.Left, doubleClick: true, target, cancellationToken);
                 break;
             case "rclick":
-                MouseClick(arg, MouseButton.Right, doubleClick: false, cancellationToken);
+                MouseClick(arg, MouseButton.Right, doubleClick: false, target, cancellationToken);
                 break;
             case "run":
+                target.ThrowIfNotForeground(cancellationToken);
                 Launch(arg);
                 break;
             case "sleep":
-                if (int.TryParse(arg, out int ms) && ms > 0)
-                    Delay(Math.Min(ms, 60_000), cancellationToken);
+                if (!int.TryParse(arg, out int ms) || ms < 0)
+                    throw new FormatException($"Некорректная задержка: {arg}");
+                Delay(Math.Min(ms, 60_000), cancellationToken);
                 break;
             default:
-                AppLog.Write($"Macro contains unknown verb '{verb}'");
-                break;
+                throw new FormatException($"Неизвестная команда макроса: {verb}");
         }
     }
 
@@ -107,7 +109,8 @@ internal static class MacroRunner
     private static void SendCombo(string combo)
     {
         var parts = combo.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 0) return;
+        if (parts.Length == 0)
+            throw new FormatException("Пустое сочетание клавиш.");
 
         var mods = new List<ushort>();
         ushort main = 0;
@@ -119,27 +122,24 @@ internal static class MacroRunner
                 case "alt":                  mods.Add(0x12); break;
                 case "shift":                mods.Add(0x10); break;
                 case "win":                  mods.Add(0x5B); break;
-                default:                     main = NameToVk(p); break;
+                default:
+                    main = NameToVk(p);
+                    if (main == 0)
+                        throw new FormatException($"Неизвестная клавиша: {p}");
+                    break;
             }
         }
-        if (main == 0 && mods.Count == 0) return;
+
+        if (main == 0)
+            throw new FormatException("Сочетание должно содержать основную клавишу.");
 
         var inputs = new List<NativeMethods.INPUT>();
-        foreach (var m in mods) inputs.Add(KeyInput(m, up: false));
-        if (main != 0)
-        {
-            inputs.Add(KeyInput(main, up: false));
-            inputs.Add(KeyInput(main, up: true));
-        }
+        foreach (var modifier in mods) inputs.Add(KeyInput(modifier, up: false));
+        inputs.Add(KeyInput(main, up: false));
+        inputs.Add(KeyInput(main, up: true));
         for (int i = mods.Count - 1; i >= 0; i--) inputs.Add(KeyInput(mods[i], up: true));
 
-        NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
-    }
-
-    private static void SendVk(ushort vk)
-    {
-        var inputs = new[] { KeyInput(vk, up: false), KeyInput(vk, up: true) };
-        NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+        InputInjection.Send(inputs);
     }
 
     private static NativeMethods.INPUT KeyInput(ushort vk, bool up)
@@ -203,23 +203,27 @@ internal static class MacroRunner
         string arg,
         MouseButton button,
         bool doubleClick,
+        AutomationTarget target,
         CancellationToken cancellationToken)
     {
+        target.ThrowIfNotForeground(cancellationToken);
+
         if (arg.Length > 0)
         {
             var xy = arg.Split(',', StringSplitOptions.TrimEntries);
-            if (xy.Length == 2 && int.TryParse(xy[0], out int x) && int.TryParse(xy[1], out int y))
-            {
-                NativeMethods.SetCursorPos(x, y);
-                Delay(20, cancellationToken);
-            }
+            if (xy.Length != 2 || !int.TryParse(xy[0], out int x) || !int.TryParse(xy[1], out int y))
+                throw new FormatException($"Координаты мыши должны иметь формат x,y: {arg}");
+
+            InputInjection.SetCursorPosition(x, y);
+            Delay(20, cancellationToken);
+            target.ThrowIfNotForeground(cancellationToken);
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
         SendMouseClick(button);
         if (doubleClick)
         {
             Delay(40, cancellationToken);
+            target.ThrowIfNotForeground(cancellationToken);
             SendMouseClick(button);
         }
     }
@@ -228,8 +232,7 @@ internal static class MacroRunner
     {
         uint down = button == MouseButton.Left ? NativeMethods.MOUSEEVENTF_LEFTDOWN : NativeMethods.MOUSEEVENTF_RIGHTDOWN;
         uint up   = button == MouseButton.Left ? NativeMethods.MOUSEEVENTF_LEFTUP   : NativeMethods.MOUSEEVENTF_RIGHTUP;
-        var inputs = new[] { MouseInput(down), MouseInput(up) };
-        NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+        InputInjection.Send(new[] { MouseInput(down), MouseInput(up) });
     }
 
     private static NativeMethods.INPUT MouseInput(uint flags) => new()
@@ -250,20 +253,7 @@ internal static class MacroRunner
 
     private static void Launch(string command)
     {
-        string fileName, arguments;
-        if (command.StartsWith('"'))
-        {
-            int end = command.IndexOf('"', 1);
-            fileName = end > 1 ? command[1..end] : command;
-            arguments = end > 1 ? command[(end + 1)..].Trim() : "";
-        }
-        else
-        {
-            int sp = command.IndexOf(' ');
-            fileName = sp > 0 ? command[..sp] : command;
-            arguments = sp > 0 ? command[(sp + 1)..].Trim() : "";
-        }
-
+        CommandLineParser.Split(command, out string fileName, out string arguments);
         Process.Start(new ProcessStartInfo
         {
             FileName = fileName,
