@@ -22,7 +22,7 @@ internal sealed class ExecutionQueue : IDisposable
 
     public event Action<string>? JobStarted;
     public event Action<string>? JobCompleted;
-    public event Action<string>? JobCancelled;
+    public event Action<string, string?>? JobCancelled;
     public event Action<string, Exception>? JobFailed;
 
     public ExecutionQueue()
@@ -93,9 +93,9 @@ internal sealed class ExecutionQueue : IDisposable
                 cancellation.Token.ThrowIfCancellationRequested();
                 JobCompleted?.Invoke(job.Description);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
-                JobCancelled?.Invoke(job.Description);
+                JobCancelled?.Invoke(job.Description, ex.Message);
             }
             catch (Exception ex)
             {
