@@ -5,7 +5,7 @@ namespace MacroEngine.Core;
 
 /// <summary>
 /// Low-level global keyboard hook. Intercepts all key presses system-wide.
-/// Fires <see cref="KeyPressed"/> event on every WM_KEYDOWN.
+/// Fires <see cref="KeyPressed"/> on every WM_KEYDOWN.
 /// </summary>
 internal sealed class KeyInterceptor : IDisposable
 {
@@ -39,7 +39,7 @@ internal sealed class KeyInterceptor : IDisposable
 
     public KeyInterceptor()
     {
-        // Keep delegate alive — GC would collect it otherwise
+        // Keep delegate alive — GC would collect it otherwise.
         _hookProc = HookCallback;
     }
 
@@ -47,7 +47,7 @@ internal sealed class KeyInterceptor : IDisposable
     public void Start()
     {
         if (_hookId != IntPtr.Zero)
-            return; // already hooked
+            return;
 
         using var process = Process.GetCurrentProcess();
         using var module = process.MainModule;
@@ -57,8 +57,8 @@ internal sealed class KeyInterceptor : IDisposable
         _hookId = NativeMethods.SetWindowsHookEx(
             NativeMethods.WH_KEYBOARD_LL,
             _hookProc,
-            IntPtr.Zero,   // low-level hooks don't need module handle in .NET
-            0);            // 0 = global (all threads)
+            IntPtr.Zero,
+            0);
 
         if (_hookId == IntPtr.Zero)
         {
@@ -84,6 +84,15 @@ internal sealed class KeyInterceptor : IDisposable
             int msg = wParam.ToInt32();
             if (msg == NativeMethods.WM_KEYDOWN || msg == NativeMethods.WM_SYSKEYDOWN)
             {
+                // Never process or swallow input while one of MacroEngine's own
+                // windows is active. This keeps settings, prompts and the hotkey
+                // recorder isolated from the global trigger engine.
+                if (IsOwnWindowForeground())
+                {
+                    SuppressKey = false;
+                    return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+                }
+
                 var kb = Marshal.PtrToStructure<NativeMethods.KBDLLHOOKSTRUCT>(lParam);
                 int vkCode = (int)kb.vkCode;
                 uint scanCode = kb.scanCode;
@@ -94,11 +103,11 @@ internal sealed class KeyInterceptor : IDisposable
 
                 var args = new KeyEventData(vkCode, scanCode, ctrl, alt, shift);
 
-                // ── Hotkey recording mode ────────────────────────────
+                // Legacy hook-recording mode is retained for compatibility.
                 if (IsRecordingHotkey)
                 {
                     bool hasCtrl = ctrl || (NativeMethods.GetAsyncKeyState(0xA2) & 0x8000) != 0;
-                    bool hasAlt  = alt  || (NativeMethods.GetAsyncKeyState(0xA4) & 0x8000) != 0;
+                    bool hasAlt = alt || (NativeMethods.GetAsyncKeyState(0xA4) & 0x8000) != 0;
                     bool hasShift = shift;
 
                     var parts = new List<string>();
@@ -109,8 +118,7 @@ internal sealed class KeyInterceptor : IDisposable
                     string keyName = VkToName(vkCode);
                     bool isModifier = keyName.Length == 0;
 
-                    // Cancel on Escape or click-away
-                    if (vkCode == 0x1B) // Escape
+                    if (vkCode == 0x1B)
                     {
                         IsRecordingHotkey = false;
                         HotkeyRecorded?.Invoke("");
@@ -119,7 +127,6 @@ internal sealed class KeyInterceptor : IDisposable
 
                     if (!isModifier && parts.Count > 0)
                     {
-                        // Final combo
                         parts.Add(keyName);
                         string combo = string.Join("+", parts);
                         if (!SystemHotkeys.IsSystem(combo))
@@ -129,36 +136,40 @@ internal sealed class KeyInterceptor : IDisposable
                             HotkeyRecorded?.Invoke(combo);
                             return (IntPtr)1;
                         }
-                        // System hotkey — keep recording, swallow key
+
                         return (IntPtr)1;
                     }
-                    else if (parts.Count > 0)
+
+                    if (parts.Count > 0)
                     {
-                        // Modifiers held — show live preview
-                        string partial = string.Join("+", parts) + "+…";
-                        HotkeyRecording?.Invoke(partial);
+                        HotkeyRecording?.Invoke(string.Join("+", parts) + "+…");
                         return (IntPtr)1;
                     }
-                    else
-                    {
-                        // No modifiers yet — swallow key, wait for Ctrl/Alt
-                        HotkeyRecording?.Invoke("Нажмите Ctrl/Alt...");
-                        return (IntPtr)1;
-                    }
+
+                    HotkeyRecording?.Invoke("Нажмите Ctrl/Alt...");
+                    return (IntPtr)1;
                 }
 
                 KeyPressed?.Invoke(args);
 
-                // Suppress keystroke if hotkey handler requested it
                 if (SuppressKey)
                 {
                     SuppressKey = false;
-                    return (IntPtr)1; // Block keystroke from reaching target app
+                    return (IntPtr)1;
                 }
             }
         }
 
         return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+    }
+
+    private static bool IsOwnWindowForeground()
+    {
+        IntPtr hWnd = NativeMethods.GetForegroundWindow();
+        if (hWnd == IntPtr.Zero) return false;
+
+        NativeMethods.GetWindowThreadProcessId(hWnd, out uint processId);
+        return processId == (uint)Environment.ProcessId;
     }
 
     public void Dispose()
@@ -200,7 +211,6 @@ internal sealed class KeyEventData
     public bool Alt { get; }
     public bool Shift { get; }
 
-    /// <summary>Cached character — computed once via ToUnicode.</summary>
     private char? _cachedChar;
 
     public KeyEventData(int vkCode, uint scanCode, bool ctrl, bool alt, bool shift)
@@ -213,9 +223,8 @@ internal sealed class KeyEventData
     }
 
     /// <summary>
-    /// Convert virtual key + scan code to a Unicode character
-    /// using the current keyboard layout (via ToUnicode).
-    /// Returns '\0' if the key does not produce a character.
+    /// Convert virtual key + scan code to a Unicode character using the
+    /// foreground window's keyboard layout. Returns '\0' for non-text keys.
     /// </summary>
     public char ToChar()
     {
@@ -224,27 +233,18 @@ internal sealed class KeyEventData
 
         _cachedChar = '\0';
 
-        // Modifier keys alone don't produce characters
-        if (VirtualKeyCode is 0x10 or 0x11 or 0x12 or 0x5B or 0x5C) // Shift/Ctrl/Alt/Win
+        if (VirtualKeyCode is 0x10 or 0x11 or 0x12 or 0x5B or 0x5C)
             return '\0';
-
-        // Let ToUnicode decide whether the key produces a character.
-        // (Previously we returned '\0' for any Ctrl/Alt, which blocked
-        //  AltGr combinations like AltGr+2 → @ on Russian layout.)
 
         try
         {
-            // Get current keyboard state (256 bytes)
             byte[] keyState = new byte[256];
             if (!NativeMethods.GetKeyboardState(keyState))
                 return '\0';
 
-            // Force Shift state in the keyboard state buffer
             if (Shift)
-                keyState[0x10] = 0x80; // VK_SHIFT pressed
+                keyState[0x10] = 0x80;
 
-            // Call ToUnicodeEx with the foreground window's keyboard layout,
-            // not the hook thread's layout (they can differ!).
             var sb = new System.Text.StringBuilder(4);
             IntPtr hkl = WindowContext.GetForegroundKeyboardLayout();
             int result = NativeMethods.ToUnicodeEx(
@@ -256,16 +256,12 @@ internal sealed class KeyEventData
                 0,
                 hkl);
 
-            // result == 1 means one character was produced
-            // result > 1 means dead key (ignore for now)
             if (result == 1 && sb.Length > 0)
-            {
                 _cachedChar = sb[0];
-            }
         }
         catch
         {
-            // Fallback: ignore errors in character conversion
+            // Character conversion is best-effort; non-text keys are ignored.
         }
 
         return _cachedChar.Value;

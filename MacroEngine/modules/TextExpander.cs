@@ -121,7 +121,7 @@ internal static class TextExpander
     //  Dynamic tokens: {date} {time} {clipboard} {year} {datetime}
     // ═══════════════════════════════════════════════════════════════
 
-    private static string ResolveTokens(string text)
+    internal static string ResolveTokens(string text)
     {
         // Custom date/time format: {datetime:HH:mm} or {datetime:yyyy-MM-dd}
         text = Regex.Replace(text, @"\{datetime:([^}]*)\}", m =>
@@ -143,7 +143,7 @@ internal static class TextExpander
             string label = m.Groups[1].Success && m.Groups[1].Value.Length > 0
                 ? m.Groups[1].Value
                 : "Введите значение:";
-            return PromptForm.AskText(label);
+            return PromptWindow.AskText(label);
         });
 
         // {choice:a|b|c} — let the user pick one option.
@@ -151,10 +151,23 @@ internal static class TextExpander
         {
             var opts = m.Groups[1].Value.Split('|',
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            return opts.Length > 0 ? PromptForm.AskChoice("Выберите:", opts) : "";
+            return opts.Length > 0 ? PromptWindow.AskChoice("Выберите:", opts) : "";
         });
 
         return text;
+    }
+
+    /// <summary>Erase characters by sending Backspace keys. Caller manages IsSuppressed.</summary>
+    public static void EraseChars(int count)
+    {
+        if (count <= 0) return;
+        Thread.Sleep(60);
+        for (int i = 0; i < count; i++)
+        {
+            SendKeyDownUp(VK_BACK);
+            Thread.Sleep(15);
+        }
+        Thread.Sleep(30);
     }
 
     /// <summary>

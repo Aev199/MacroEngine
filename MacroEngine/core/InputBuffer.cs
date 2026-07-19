@@ -2,10 +2,7 @@ using System.Text;
 
 namespace MacroEngine.Core;
 
-/// <summary>
-/// Stores a single keystroke: virtual key code, shift state, and the
-/// actual Unicode character produced (for debug/logging).
-/// </summary>
+/// <summary>One layout-aware keystroke stored in the text trigger buffer.</summary>
 internal readonly struct KeyStroke
 {
     public int VkCode { get; }
@@ -23,39 +20,22 @@ internal readonly struct KeyStroke
 }
 
 /// <summary>
-/// Tracks the last N keystrokes as characters (layout-aware via ToUnicodeEx)
-/// and detects configured triggers by comparing buffer suffix against trigger strings.
+/// Tracks recent printable input, direct shortcuts and held leader sequences.
 /// </summary>
 internal sealed class InputBuffer
 {
     private readonly List<KeyStroke> _buffer = new();
     private readonly int _maxLength;
     private readonly object _lock = new();
-
-    /// <summary>
-    /// Maps (triggerString, windowContext) → replacementText.
-    /// windowContext of "*" means global (matches any window).
-    /// </summary>
     private readonly List<TriggerEntry> _triggers = new();
+    private readonly Dictionary<string, TriggerEntry> _hotkeyMap =
+        new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Fired when a trigger is matched. Provides the full trigger entry.</summary>
-    public event Action<TriggerEntry>? TriggerMatched;
-
-    /// <summary>Quick lookup: normalized hotkey string → TriggerEntry.</summary>
-    private readonly Dictionary<string, TriggerEntry> _hotkeyMap = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Quick lookup: normalized leader modifier-chord (e.g. "ctrl+alt") →
-    /// list of (restSequence, TriggerEntry) pairs. The rest sequence is a
-    /// lower-cased string of key names typed while the chord is held.
-    /// </summary>
     private Dictionary<string, List<(string Seq, TriggerEntry Entry)>>? _leaderMap;
-
-    /// <summary>Modifier chord (normalized) of the leader sequence currently being typed, or null.</summary>
     private string? _leaderMods;
-
-    /// <summary>Accumulated key-name sequence typed while the leader chord is held.</summary>
     private readonly StringBuilder _leaderSeq = new();
+
+    public event Action<TriggerEntry>? TriggerMatched;
 
     public string? CurrentLeaderMods => _leaderMods;
     public string CurrentLeaderSeq => _leaderSeq.ToString();
@@ -66,7 +46,6 @@ internal sealed class InputBuffer
         _maxLength = maxLength;
     }
 
-    /// <summary>Load triggers from configuration.</summary>
     public void LoadTriggers(IEnumerable<TriggerEntry> triggers)
     {
         lock (_lock)
@@ -76,91 +55,111 @@ internal sealed class InputBuffer
 
             _hotkeyMap.Clear();
             _leaderMap = null;
-            foreach (var t in _triggers)
+            ResetLeaderUnsafe();
+
+            foreach (var trigger in _triggers)
             {
-                if (!string.IsNullOrWhiteSpace(t.Hotkey))
-                    _hotkeyMap[NormalizeHotkey(t.Hotkey)] = t;
-                if (!string.IsNullOrWhiteSpace(t.Leader) && !string.IsNullOrEmpty(t.Trigger))
+                if (!string.IsNullOrWhiteSpace(trigger.Hotkey))
+                    _hotkeyMap[NormalizeHotkey(trigger.Hotkey)] = trigger;
+
+                if (!string.IsNullOrWhiteSpace(trigger.Leader)
+                    && !string.IsNullOrEmpty(trigger.Trigger))
                 {
                     _leaderMap ??= new(StringComparer.OrdinalIgnoreCase);
-                    string norm = NormalizeHotkey(t.Leader);
-                    if (!_leaderMap.ContainsKey(norm))
-                        _leaderMap[norm] = new();
-                    // The "rest" sequence is matched by key name, so store it lower-cased.
-                    _leaderMap[norm].Add((t.Trigger.ToLowerInvariant(), t));
+                    string normalizedLeader = NormalizeHotkey(trigger.Leader);
+                    if (!_leaderMap.TryGetValue(normalizedLeader, out var entries))
+                    {
+                        entries = new List<(string Seq, TriggerEntry Entry)>();
+                        _leaderMap[normalizedLeader] = entries;
+                    }
+
+                    entries.Add((trigger.Trigger.ToLowerInvariant(), trigger));
                 }
             }
         }
     }
 
-    /// <summary>Check if a key combo matches any hotkey trigger. Returns the entry or null.</summary>
+    /// <summary>
+    /// Match a direct shortcut. The returned entry has an empty Trigger so the
+    /// execution layer never backspaces a legacy trigger label attached to a hotkey.
+    /// </summary>
     public TriggerEntry? MatchHotkey(string combo)
     {
         lock (_lock)
         {
-            string norm = NormalizeHotkey(combo);
-            _hotkeyMap.TryGetValue(norm, out var entry);
-            return entry;
+            if (!_hotkeyMap.TryGetValue(NormalizeHotkey(combo), out var entry))
+                return null;
+
+            return new TriggerEntry
+            {
+                Trigger = "",
+                Value = entry.Value,
+                Context = entry.Context,
+                Action = entry.Action,
+                Hotkey = entry.Hotkey,
+                Leader = null
+            };
         }
     }
 
     /// <summary>
-    /// Feed a key that was pressed while a modifier chord is held, building up a
-    /// leader sequence ("hold Ctrl+Alt, then type the rest").
-    ///
-    /// <paramref name="modPrefix"/> is the chord of currently-held modifiers
-    /// (e.g. "Ctrl+Alt"); <paramref name="keyName"/> is the non-modifier key just
-    /// pressed (e.g. "G"). Returns true when a full leader trigger fired.
-    ///
-    /// <paramref name="swallow"/> tells the caller whether to suppress the key from
-    /// reaching the target app — true whenever the key is part of a potential leader
-    /// sequence, so configured leader combos override system hotkeys.
+    /// Feed a non-modifier key pressed while a leader chord is held.
     /// </summary>
-    public bool FeedLeaderKey(string modPrefix, string keyName, string windowFingerprint, out bool swallow)
+    public bool FeedLeaderKey(
+        string modPrefix,
+        string keyName,
+        string windowFingerprint,
+        out bool swallow)
     {
         swallow = false;
 
         string key = keyName.ToLowerInvariant();
         if (key.Length == 0) return false;
 
-        string normMods = NormalizeHotkey(modPrefix);
-
+        string normalizedMods = NormalizeHotkey(modPrefix);
         List<(string Seq, TriggerEntry Entry)> candidates;
+
         lock (_lock)
         {
-            if (_leaderMap == null || !_leaderMap.TryGetValue(normMods, out var list))
+            if (_leaderMap == null
+                || !_leaderMap.TryGetValue(normalizedMods, out var configured))
             {
-                // Not a leader chord — abandon any sequence in progress.
-                _leaderMods = null;
-                _leaderSeq.Clear();
+                ResetLeaderUnsafe();
                 return false;
             }
-            candidates = new List<(string Seq, TriggerEntry Entry)>(list);
+
+            candidates = new List<(string Seq, TriggerEntry Entry)>(configured);
         }
 
-        // A different chord engaged — restart the sequence.
-        if (_leaderMods != normMods)
+        if (_leaderMods != normalizedMods)
         {
-            _leaderMods = normMods;
+            _leaderMods = normalizedMods;
             _leaderSeq.Clear();
         }
 
-        // Try extending the current sequence first, then the key on its own (fresh start).
-        foreach (var attempt in new[] { _leaderSeq.ToString() + key, key })
+        foreach (string attempt in new[] { _leaderSeq.ToString() + key, key })
         {
-            if (TryMatchLeader(candidates, attempt, windowFingerprint, out var exact, out bool isPrefix))
+            if (!TryMatchLeader(
+                    candidates,
+                    attempt,
+                    windowFingerprint,
+                    out TriggerEntry? exact,
+                    out bool isPrefix))
             {
-                if (exact != null)
-                {
-                    LastMatchedLeaderSeq = attempt;
-                    _leaderMods = null;
-                    _leaderSeq.Clear();
-                    swallow = true;
-                    TriggerMatched?.Invoke(exact);
-                    return true;
-                }
+                continue;
+            }
 
-                // Valid prefix of some trigger — keep accumulating, swallow the key.
+            if (exact != null)
+            {
+                LastMatchedLeaderSeq = attempt;
+                ResetLeader();
+                swallow = true;
+                TriggerMatched?.Invoke(exact);
+                return true;
+            }
+
+            if (isPrefix)
+            {
                 _leaderSeq.Clear();
                 _leaderSeq.Append(attempt);
                 swallow = true;
@@ -168,25 +167,24 @@ internal sealed class InputBuffer
             }
         }
 
-        // The key continues no leader sequence — let it through normally.
-        _leaderMods = null;
-        _leaderSeq.Clear();
+        ResetLeader();
         return false;
     }
 
-    /// <summary>Abort any leader sequence currently in progress.</summary>
     public void ResetLeader()
+    {
+        lock (_lock)
+            ResetLeaderUnsafe();
+    }
+
+    private void ResetLeaderUnsafe()
     {
         _leaderMods = null;
         _leaderSeq.Clear();
     }
 
-    /// <summary>
-    /// Check whether <paramref name="attempt"/> exactly matches or is a prefix of any
-    /// context-matching candidate's rest sequence.
-    /// </summary>
     private static bool TryMatchLeader(
-        List<(string Seq, TriggerEntry Entry)> candidates,
+        IEnumerable<(string Seq, TriggerEntry Entry)> candidates,
         string attempt,
         string windowFingerprint,
         out TriggerEntry? exact,
@@ -195,32 +193,30 @@ internal sealed class InputBuffer
         exact = null;
         isPrefix = false;
 
-        foreach (var (rest, entry) in candidates)
+        foreach (var (sequence, entry) in candidates)
         {
             if (!WindowContext.MatchesContext(entry.Context, windowFingerprint))
                 continue;
 
-            if (string.Equals(rest, attempt, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(sequence, attempt, StringComparison.OrdinalIgnoreCase))
             {
                 exact = entry;
                 return true;
             }
-            if (rest.StartsWith(attempt, StringComparison.OrdinalIgnoreCase))
+
+            if (sequence.StartsWith(attempt, StringComparison.OrdinalIgnoreCase))
                 isPrefix = true;
         }
 
         return isPrefix;
     }
 
-    /// <summary>Normalize hotkey strings for case-insensitive matching.</summary>
-    private static string NormalizeHotkey(string hk) =>
-        hk.Replace(" ", "").ToLowerInvariant();
+    private static string NormalizeHotkey(string hotkey) =>
+        hotkey.Replace(" ", "").ToLowerInvariant();
 
-    /// <summary>Feed a keystroke into the buffer and check for triggers.</summary>
     public void Feed(KeyEventData key, string? windowFingerprint = null)
     {
-        // Handle special keys
-        if (key.VirtualKeyCode == 0x08) // Backspace
+        if (key.VirtualKeyCode == 0x08)
         {
             lock (_lock)
             {
@@ -230,94 +226,91 @@ internal sealed class InputBuffer
             return;
         }
 
-        if (key.VirtualKeyCode is 0x0D or 0x1B) // Enter or Escape
+        if (key.VirtualKeyCode is 0x0D or 0x1B)
         {
-            lock (_lock) { _buffer.Clear(); }
+            Clear();
             return;
         }
 
-        // Only process keys that produce a printable character.
-        char c = key.ToChar();
-        if (c == '\0') return;
+        char character = key.ToChar();
+        if (character == '\0') return;
 
-        // Add keystroke to buffer
-        var stroke = new KeyStroke(key.VirtualKeyCode, key.Shift, c);
         lock (_lock)
         {
-            _buffer.Add(stroke);
+            _buffer.Add(new KeyStroke(key.VirtualKeyCode, key.Shift, character));
             while (_buffer.Count > _maxLength)
                 _buffer.RemoveAt(0);
         }
 
-        // Check for trigger matches
         CheckTriggers(windowFingerprint ?? "*");
     }
 
-    /// <summary>Clear the entire buffer.</summary>
     public void Clear()
     {
-        lock (_lock) { _buffer.Clear(); }
+        lock (_lock)
+        {
+            _buffer.Clear();
+            ResetLeaderUnsafe();
+        }
     }
 
-    /// <summary>Get current buffer as debug string.</summary>
     public string GetBufferDebug()
     {
         lock (_lock)
         {
-            var sb = new StringBuilder();
-            foreach (var s in _buffer)
-                sb.Append(s.Character);
-            return sb.ToString();
+            var result = new StringBuilder();
+            foreach (var stroke in _buffer)
+                result.Append(stroke.Character);
+            return result.ToString();
         }
     }
 
     private void CheckTriggers(string windowFingerprint)
     {
-        // Take a snapshot of the buffer under lock
         List<KeyStroke> bufferSnapshot;
-        List<TriggerEntry> triggersCopy;
+        List<TriggerEntry> triggersSnapshot;
         lock (_lock)
         {
             bufferSnapshot = new List<KeyStroke>(_buffer);
-            triggersCopy = new List<TriggerEntry>(_triggers);
+            triggersSnapshot = new List<TriggerEntry>(_triggers);
         }
 
         if (bufferSnapshot.Count == 0) return;
 
-        foreach (var trigger in triggersCopy)
+        foreach (var trigger in triggersSnapshot)
         {
-            // Skip leader triggers — they fire via FeedLeaderKey()
-            if (!string.IsNullOrWhiteSpace(trigger.Leader))
+            // A shortcut/leader is not also a typed trigger, even if an older
+            // configuration still contains a descriptive Trigger value.
+            if (!string.IsNullOrWhiteSpace(trigger.Hotkey)
+                || !string.IsNullOrWhiteSpace(trigger.Leader))
+            {
                 continue;
+            }
 
-            // Check context match (supports "*", comma-separated, exclusion with "!")
             if (!WindowContext.MatchesContext(trigger.Context, windowFingerprint))
                 continue;
 
-            int tLen = trigger.Trigger.Length;
-            if (tLen == 0 || tLen > bufferSnapshot.Count)
+            int triggerLength = trigger.Trigger.Length;
+            if (triggerLength == 0 || triggerLength > bufferSnapshot.Count)
                 continue;
 
-            // Compare buffer suffix characters against trigger string.
-            bool matched = true;
-            int bufStart = bufferSnapshot.Count - tLen;
-            for (int i = 0; i < tLen; i++)
+            int start = bufferSnapshot.Count - triggerLength;
+            bool matches = true;
+            for (int i = 0; i < triggerLength; i++)
             {
-                if (bufferSnapshot[bufStart + i].Character != trigger.Trigger[i])
-                {
-                    matched = false;
-                    break;
-                }
+                if (bufferSnapshot[start + i].Character == trigger.Trigger[i])
+                    continue;
+
+                matches = false;
+                break;
             }
 
-            if (matched)
-            {
-                // Clear buffer immediately to prevent residual trigger chars
-                // from causing spurious matches on subsequent keystrokes.
-                lock (_lock) { _buffer.Clear(); }
-                TriggerMatched?.Invoke(trigger);
-                return; // Only fire the first matching trigger
-            }
+            if (!matches) continue;
+
+            lock (_lock)
+                _buffer.Clear();
+            TriggerMatched?.Invoke(trigger);
+            return;
         }
     }
 }
@@ -330,5 +323,5 @@ internal sealed class TriggerEntry
     public string Context { get; set; } = "*";
     public string Action { get; set; } = "text";
     public string? Hotkey { get; set; }
-    public string? Leader { get; set; }  // Hotkey that must be pressed first, e.g. "Alt+Space"
+    public string? Leader { get; set; }
 }

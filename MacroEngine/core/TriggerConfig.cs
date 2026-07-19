@@ -1,18 +1,17 @@
-using System.Text.Json;
-
 namespace MacroEngine.Core;
 
 /// <summary>
 /// Loads and watches the triggers.json configuration file.
-/// Supports hot-reload via file system watcher.
+/// Saving is validated and atomic; a last-known-good .bak file is retained.
 /// </summary>
 internal sealed class TriggerConfig : IDisposable
 {
     private readonly string _configPath;
+    private readonly object _reloadLock = new();
     private FileSystemWatcher? _watcher;
+    private Timer? _reloadTimer;
     private bool _disposed;
 
-    /// <summary>Fired when the config file changes and is reloaded.</summary>
     public event Action<List<TriggerEntry>>? ConfigChanged;
 
     public TriggerConfig(string configPath)
@@ -20,12 +19,10 @@ internal sealed class TriggerConfig : IDisposable
         _configPath = configPath;
     }
 
-    /// <summary>Load triggers from the JSON file. Returns empty list if file doesn't exist.</summary>
     public List<TriggerEntry> Load()
     {
         if (!File.Exists(_configPath))
         {
-            // Create default config
             var defaults = GetDefaultTriggers();
             Save(defaults);
             return defaults;
@@ -33,79 +30,86 @@ internal sealed class TriggerConfig : IDisposable
 
         try
         {
-            string json = File.ReadAllText(_configPath);
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            var triggers = JsonSerializer.Deserialize<List<TriggerEntry>>(json, options);
-            return triggers ?? new List<TriggerEntry>();
+            return AtomicJsonFile.Load<List<TriggerEntry>>(_configPath);
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[TriggerConfig] Failed to load: {ex.Message}");
+            AppLog.Write($"Trigger config load failed: {ex.GetType().Name}: {ex.Message}");
+
+            if (AtomicJsonFile.TryLoadBackup<List<TriggerEntry>>(_configPath, out var backup))
+            {
+                AppLog.Write("Trigger config recovered from backup");
+                try { AtomicJsonFile.Save(_configPath, backup); }
+                catch (Exception restoreEx)
+                {
+                    AppLog.Write($"Trigger config backup restore failed: {restoreEx.GetType().Name}: {restoreEx.Message}");
+                }
+                return backup;
+            }
+
             return new List<TriggerEntry>();
         }
     }
 
-    /// <summary>Save triggers to the JSON file.</summary>
-    public void Save(List<TriggerEntry> triggers)
-    {
-        try
-        {
-            var options = new JsonSerializerOptions { WriteIndented = true, PropertyNameCaseInsensitive = true };
-            string json = JsonSerializer.Serialize(triggers, options);
-            string? dir = Path.GetDirectoryName(_configPath);
-            if (dir != null && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-            File.WriteAllText(_configPath, json);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[TriggerConfig] Failed to save: {ex.Message}");
-        }
-    }
+    /// <summary>Save triggers or throw when the data cannot be persisted safely.</summary>
+    public void Save(List<TriggerEntry> triggers) => AtomicJsonFile.Save(_configPath, triggers);
 
-    /// <summary>Start watching the config file for changes (hot-reload).</summary>
     public void StartWatching()
     {
         string? dir = Path.GetDirectoryName(_configPath);
         string file = Path.GetFileName(_configPath);
+        if (dir == null) return;
 
-        if (dir == null || !Directory.Exists(dir))
-            return;
-
+        Directory.CreateDirectory(dir);
+        _reloadTimer ??= new Timer(_ => ReloadFromWatcher(), null, Timeout.Infinite, Timeout.Infinite);
         _watcher = new FileSystemWatcher(dir, file)
         {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
             EnableRaisingEvents = true
         };
 
-        _watcher.Changed += (_, _) =>
-        {
-            // Small delay to let the file finish writing
-            Thread.Sleep(150);
-            var triggers = Load();
-            ConfigChanged?.Invoke(triggers);
-        };
+        _watcher.Changed += (_, _) => ScheduleReload();
+        _watcher.Created += (_, _) => ScheduleReload();
+        _watcher.Renamed += (_, _) => ScheduleReload();
     }
 
-    private static List<TriggerEntry> GetDefaultTriggers()
+    private void ScheduleReload()
     {
-        return new List<TriggerEntry>
-        {
-            new() { Trigger = "@@", Value = "your_email@domain.com", Context = "*", Action = "text" },
-            new() { Trigger = "!tel", Value = "+7 (999) 123-45-67", Context = "*", Action = "text" },
-            new() { Trigger = "!date", Value = "{date}", Context = "*", Action = "text" },
-            new() { Trigger = "!sig", Value = "С уважением,\nИван Иванов\nООО «ПроектСтрой»", Context = "*", Action = "text" },
-            new() { Trigger = "!path", Value = @"\\server\projects\2026\", Context = "*", Action = "text" },
-            new() { Trigger = "!db", Value = "_MYBEAMPLUGIN", Context = "acad", Action = "text" },
-            new() { Trigger = "!beam", Value = "C:\\lisp\\my_beam_routines.lsp", Context = "acad", Action = "lisp" },
-            new() { Trigger = "!vb", Value = "python C:\\scripts\\midas_virtual_beams.py", Context = "midas", Action = "script", Hotkey = "Ctrl+Shift+M" },
-        };
+        lock (_reloadLock)
+            _reloadTimer?.Change(180, Timeout.Infinite);
     }
+
+    private void ReloadFromWatcher()
+    {
+        if (_disposed) return;
+        try
+        {
+            var triggers = Load();
+            ConfigChanged?.Invoke(triggers);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write($"Trigger config hot-reload failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static List<TriggerEntry> GetDefaultTriggers() =>
+    [
+        new() { Trigger = "@@", Value = "your_email@domain.com", Context = "*", Action = "text" },
+        new() { Trigger = "!tel", Value = "+7 (999) 123-45-67", Context = "*", Action = "text" },
+        new() { Trigger = "!date", Value = "{date}", Context = "*", Action = "text" },
+        new() { Trigger = "!sig", Value = "С уважением,\nИван Иванов\nООО «ПроектСтрой»", Context = "*", Action = "text" },
+        new() { Trigger = "!path", Value = @"\\server\projects\2026\", Context = "*", Action = "text" },
+        new() { Trigger = "!db", Value = "_MYBEAMPLUGIN", Context = "acad", Action = "text" },
+        new() { Trigger = "!beam", Value = "C:\\lisp\\my_beam_routines.lsp", Context = "acad", Action = "lisp" },
+        new() { Trigger = "!vb", Value = "python C:\\scripts\\midas_virtual_beams.py", Context = "midas", Action = "script", Hotkey = "Ctrl+Shift+M" },
+    ];
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         _watcher?.Dispose();
+        _reloadTimer?.Dispose();
     }
 }
