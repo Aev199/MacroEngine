@@ -159,22 +159,30 @@ internal static class TextExpander
         AutomationTarget target,
         CancellationToken cancellationToken = default)
     {
-        if (count <= 0)
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
+        KeyInterceptor.IsSuppressed = true;
+        try
         {
-            target.ThrowIfNotForeground(cancellationToken);
-            return;
-        }
+            if (count <= 0)
+            {
+                target.ThrowIfNotForeground(cancellationToken);
+                return;
+            }
 
-        Delay(60, cancellationToken);
-        for (int i = 0; i < count; i++)
-        {
-            target.ThrowIfNotForeground(cancellationToken);
-            SendKeyDownUp(VK_BACK);
-            Delay(15, cancellationToken);
+            Delay(60, cancellationToken);
+            for (int i = 0; i < count; i++)
+            {
+                target.ThrowIfNotForeground(cancellationToken);
+                SendKeyDownUp(VK_BACK);
+                Delay(15, cancellationToken);
+            }
+            Delay(30, cancellationToken);
         }
-        Delay(30, cancellationToken);
+        finally
+        {
+            KeyInterceptor.IsSuppressed = previousSuppression;
+        }
     }
-
     public static void TypeText(
         string raw,
         AutomationTarget target,
