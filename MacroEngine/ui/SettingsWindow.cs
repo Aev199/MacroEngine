@@ -647,7 +647,17 @@ internal sealed class SettingsWindow : Window
                 "Обнаружены возможные конфликты:\n\n" + string.Join("\n", conflicts));
         }
 
-        _config.Save(entries);
+        try
+        {
+            _config.Save(entries);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write($"Trigger config save failed: {ex.GetType().Name}: {ex.Message}");
+            await MessageDialog.Show(this, "Ошибка сохранения",
+                "Не удалось сохранить триггеры.\n\n" + ex.Message);
+            return false;
+        }
         _dirty = false;
         _btnSave.IsEnabled = false;
         _triggerStatus.Text = $"Сохранено триггеров: {entries.Count}";
@@ -974,7 +984,17 @@ internal sealed class SettingsWindow : Window
             }
         }
 
-        _macros.Save(_macroDefs);
+        try
+        {
+            _macros.Save(_macroDefs);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write($"Macro library save failed: {ex.GetType().Name}: {ex.Message}");
+            await MessageDialog.Show(this, "Ошибка сохранения",
+                "Не удалось сохранить макросы.\n\n" + ex.Message);
+            return false;
+        }
         _macroDirty = false;
         _macroBtnSave.IsEnabled = false;
         _macroStatus.Text = $"Сохранено макросов: {_macroDefs.Count}";
