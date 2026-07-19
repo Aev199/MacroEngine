@@ -1,0 +1,39 @@
+name: Patch critical input safety
+
+on:
+  push:
+    branches:
+      - release/avalonia-hardening
+    paths:
+      - .github/workflows/patch-critical-input-safety.yml
+      - tools/patch-critical-input-safety.ps1
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: release/avalonia-hardening
+          fetch-depth: 0
+
+      - name: Apply exact patch
+        shell: pwsh
+        run: ./tools/patch-critical-input-safety.ps1
+
+      - name: Commit patch
+        shell: pwsh
+        run: |
+          if (-not (git diff --quiet)) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add MacroEngine/core/NativeMethods.cs MacroEngine/ui/AppController.cs
+            git commit -m "Bind automation input to the triggering window"
+            git push origin HEAD:release/avalonia-hardening
+          }
