@@ -47,7 +47,7 @@ public sealed class ExecutionQueueTests
         using var cancelled = new ManualResetEventSlim();
         using var nextCompleted = new ManualResetEventSlim();
 
-        queue.JobCancelled += _ => cancelled.Set();
+        queue.JobCancelled += (_, _) => cancelled.Set();
         queue.JobCompleted += description =>
         {
             if (description == "next") nextCompleted.Set();
