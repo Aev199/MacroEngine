@@ -322,76 +322,82 @@ internal sealed class AppController : IDisposable
                 ? "hotkey"
                 : "text";
         int eraseLength = activation == "text" ? entry.Trigger.Length : 0;
-        IntPtr targetWindow = NativeMethods.GetForegroundWindow();
+        AutomationTarget target = AutomationTarget.Capture();
 
-        AppLog.Write($"Action queued: type={action}; activation={activation}");
+        if (!target.IsCaptured)
+        {
+            AppLog.Write("Action rejected: foreground window could not be captured");
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                _overlay.ShowToast("Не удалось определить активное окно — запуск отменён", 5000));
+            return;
+        }
+
+        AppLog.Write($"Action requested: type={action}; activation={activation}");
 
         bool accepted = _executionQueue.TryEnqueue(action, cancellationToken =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (targetWindow != IntPtr.Zero)
-                NativeMethods.SetForegroundWindow(targetWindow);
-
-            ExecuteAction(entry, action, eraseLength, cancellationToken);
+            target.ThrowIfNotForeground(cancellationToken);
+            ExecuteAction(entry, action, eraseLength, target, cancellationToken);
         });
 
         if (!accepted)
         {
-            AppLog.Write("Execution queue is full; action rejected");
+            AppLog.Write("Execution worker is busy; action rejected");
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                _overlay.ShowToast("Очередь действий заполнена — запуск пропущен", 5000));
+                _overlay.ShowToast("MacroEngine занят — новый запуск пропущен", 4000));
         }
     }
-
     private void ExecuteAction(
         TriggerEntry entry,
         string action,
         int eraseLength,
+        AutomationTarget target,
         CancellationToken cancellationToken)
     {
         switch (action)
         {
             case "script":
+                TextExpander.EraseChars(eraseLength, target, cancellationToken);
                 ScriptRunner.Run(entry.Value, entry.Trigger, cancellationToken);
                 break;
             case "richtext":
-                cancellationToken.ThrowIfCancellationRequested();
-                TextExpander.ExpandRichText(entry.Value, eraseLength);
+                TextExpander.ExpandRichText(entry.Value, eraseLength, target, cancellationToken);
                 break;
             case "lisp":
-                cancellationToken.ThrowIfCancellationRequested();
-                TextExpander.LoadLisp(entry.Value, eraseLength);
+                TextExpander.LoadLisp(entry.Value, eraseLength, target, cancellationToken);
                 break;
             case "macro":
             {
                 string script = _macros.TryGet(entry.Value.Trim(), out var definition)
                     ? definition.Script
                     : entry.Value;
-                MacroRunner.Run(script, eraseLength, cancellationToken);
+                MacroRunner.Run(script, eraseLength, target, cancellationToken);
                 break;
             }
             case "open":
-                OpenPath(entry.Value, eraseLength, cancellationToken);
+                OpenPath(entry.Value, eraseLength, target, cancellationToken);
                 break;
             case "launch":
-                Launch(entry.Value, eraseLength, cancellationToken);
+                Launch(entry.Value, eraseLength, target, cancellationToken);
                 break;
             case "text":
             default:
-                cancellationToken.ThrowIfCancellationRequested();
-                TextExpander.Expand(entry.Value, eraseLength);
+                TextExpander.Expand(entry.Value, eraseLength, target, cancellationToken);
                 break;
         }
     }
-
-    private static void OpenPath(string rawPath, int eraseLength, CancellationToken cancellationToken)
+    private static void OpenPath(
+        string rawPath,
+        int eraseLength,
+        AutomationTarget target,
+        CancellationToken cancellationToken)
     {
         KeyInterceptor.IsSuppressed = true;
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            TextExpander.EraseChars(eraseLength);
-            string path = TextExpander.ResolveTokens(rawPath).Trim();
+            target.ThrowIfNotForeground(cancellationToken);
+            TextExpander.EraseChars(eraseLength, target, cancellationToken);
+            string path = TextExpander.ResolveTokens(rawPath, target, cancellationToken).Trim();
             cancellationToken.ThrowIfCancellationRequested();
             Process.Start("explorer.exe", path);
         }
@@ -401,36 +407,33 @@ internal sealed class AppController : IDisposable
         }
     }
 
-    private static void Launch(string rawCommand, int eraseLength, CancellationToken cancellationToken)
+    private static void Launch(
+        string rawCommand,
+        int eraseLength,
+        AutomationTarget target,
+        CancellationToken cancellationToken)
     {
         KeyInterceptor.IsSuppressed = true;
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            TextExpander.EraseChars(eraseLength);
-            string command = TextExpander.ResolveTokens(rawCommand).Trim();
+            target.ThrowIfNotForeground(cancellationToken);
+            TextExpander.EraseChars(eraseLength, target, cancellationToken);
+            string command = TextExpander.ResolveTokens(rawCommand, target, cancellationToken).Trim();
             cancellationToken.ThrowIfCancellationRequested();
 
-            var startInfo = new ProcessStartInfo { UseShellExecute = true };
-            if (command.StartsWith('"'))
+            CommandLineParser.Split(command, out string fileName, out string arguments);
+            Process.Start(new ProcessStartInfo
             {
-                int end = command.IndexOf('"', 1);
-                startInfo.FileName = end > 0 ? command[1..end] : command.Trim('"');
-                if (end > 0 && end + 1 < command.Length)
-                    startInfo.Arguments = command[(end + 1)..].TrimStart();
-            }
-            else
-            {
-                startInfo.FileName = command;
-            }
-            Process.Start(startInfo);
+                FileName = fileName,
+                Arguments = arguments,
+                UseShellExecute = true
+            });
         }
         finally
         {
             KeyInterceptor.IsSuppressed = false;
         }
     }
-
     private void OnConfigChanged(List<TriggerEntry> newTriggers)
     {
         _inputBuffer.LoadTriggers(newTriggers);
