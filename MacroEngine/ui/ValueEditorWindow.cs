@@ -6,51 +6,88 @@ using Avalonia.Media;
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Modal editor for a trigger's value. Two modes:
-///   text  — multiline monospace editor with a token hint;
-///   macro — dropdown of named macros (for action="macro").
-/// Close via <c>ShowDialog&lt;string?&gt;(owner)</c>: returns the value or null if cancelled.
+/// Modal editor for a trigger value. Text actions use a multiline editor;
+/// macro actions use a picker of named macros while preserving missing or
+/// legacy inline values instead of silently replacing them.
 /// </summary>
 internal sealed class ValueEditorWindow : Window
 {
     private readonly TextBox? _editor;
     private readonly ComboBox? _macroCombo;
 
-    public ValueEditorWindow(string currentValue, string triggerName,
-                             IReadOnlyList<string>? macroNames = null)
+    public ValueEditorWindow(
+        string currentValue,
+        string triggerName,
+        IReadOnlyList<string>? macroNames = null)
     {
         bool macroMode = macroNames != null;
 
         Title = $"Значение — {triggerName}";
         Width = 540;
-        Height = macroMode ? 190 : 380;
+        Height = macroMode ? 210 : 380;
         MinWidth = 400;
-        MinHeight = macroMode ? 190 : 260;
+        MinHeight = macroMode ? 210 : 260;
         CanResize = !macroMode;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
         Icon = AppIcon.Get();
 
+        TextBlock? macroWarning = null;
         Control body;
+
         if (macroMode)
         {
+            var names = macroNames!
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            int selectedIndex = names.FindIndex(n =>
+                string.Equals(n, currentValue, StringComparison.OrdinalIgnoreCase));
+
+            bool missingCurrent = currentValue.Length > 0 && selectedIndex < 0;
+            if (missingCurrent)
+            {
+                names.Insert(0, currentValue);
+                selectedIndex = 0;
+            }
+            else if (selectedIndex < 0 && names.Count > 0)
+            {
+                selectedIndex = 0;
+            }
+
             _macroCombo = new ComboBox
             {
-                ItemsSource = macroNames,
+                ItemsSource = names,
+                SelectedIndex = selectedIndex,
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
-            int idx = -1;
-            for (int i = 0; i < macroNames!.Count; i++)
-                if (string.Equals(macroNames[i], currentValue, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
-            _macroCombo.SelectedIndex = idx >= 0 ? idx : (macroNames.Count > 0 ? 0 : -1);
+
+            macroWarning = new TextBlock
+            {
+                Text = missingCurrent
+                    ? "Текущее значение не найдено в библиотеке макросов. Оно сохранено в списке, чтобы не потерять конфигурацию."
+                    : names.Count == 0
+                        ? "Сначала создайте макрос на вкладке «Макросы»."
+                        : "",
+                IsVisible = missingCurrent || names.Count == 0,
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 190, 100)),
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 12
+            };
 
             body = new StackPanel
             {
                 Spacing = 8,
                 Children =
                 {
-                    new TextBlock { Text = "Макрос (вкладка «Макросы»):", Opacity = 0.7 },
-                    _macroCombo
+                    new TextBlock
+                    {
+                        Text = "Макрос (вкладка «Макросы»):",
+                        Opacity = 0.7
+                    },
+                    _macroCombo,
+                    macroWarning
                 }
             };
         }
@@ -77,8 +114,18 @@ internal sealed class ValueEditorWindow : Window
             IsVisible = !macroMode
         };
 
-        var btnOk = new Button { Content = "OK", Width = 90, IsDefault = macroMode };
+        var btnOk = new Button
+        {
+            Content = "OK",
+            Width = 90,
+            IsDefault = macroMode,
+            IsEnabled = !macroMode || _macroCombo!.SelectedIndex >= 0
+        };
         var btnCancel = new Button { Content = "Отмена", Width = 90, IsCancel = true };
+
+        if (_macroCombo != null)
+            _macroCombo.SelectionChanged += (_, _) => btnOk.IsEnabled = _macroCombo.SelectedIndex >= 0;
+
         btnOk.Click += (_, _) => Close(CurrentValue());
         btnCancel.Click += (_, _) => Close(null);
 
