@@ -1,0 +1,39 @@
+name: Patch settings save errors
+
+on:
+  push:
+    branches:
+      - claude/festive-lamport-g4qh0t
+    paths:
+      - .github/workflows/patch-settings-save-errors.yml
+      - tools/patch-settings-save-errors.ps1
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: claude/festive-lamport-g4qh0t
+          fetch-depth: 0
+
+      - name: Apply exact patch
+        shell: pwsh
+        run: ./tools/patch-settings-save-errors.ps1
+
+      - name: Commit patch
+        shell: pwsh
+        run: |
+          if (-not (git diff --quiet)) {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add MacroEngine/ui/SettingsWindow.cs
+            git commit -m "Handle settings persistence failures"
+            git push origin HEAD:claude/festive-lamport-g4qh0t
+          }
