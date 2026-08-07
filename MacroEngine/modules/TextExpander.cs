@@ -22,6 +22,7 @@ internal static class TextExpander
         AutomationTarget target,
         CancellationToken cancellationToken = default)
     {
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
         KeyInterceptor.IsSuppressed = true;
         try
         {
@@ -48,7 +49,7 @@ internal static class TextExpander
         }
         finally
         {
-            KeyInterceptor.IsSuppressed = false;
+            KeyInterceptor.IsSuppressed = previousSuppression;
         }
     }
 
@@ -58,6 +59,7 @@ internal static class TextExpander
         AutomationTarget target,
         CancellationToken cancellationToken = default)
     {
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
         KeyInterceptor.IsSuppressed = true;
         try
         {
@@ -73,7 +75,7 @@ internal static class TextExpander
         }
         finally
         {
-            KeyInterceptor.IsSuppressed = false;
+            KeyInterceptor.IsSuppressed = previousSuppression;
         }
     }
 
@@ -83,6 +85,7 @@ internal static class TextExpander
         AutomationTarget target,
         CancellationToken cancellationToken = default)
     {
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
         KeyInterceptor.IsSuppressed = true;
         try
         {
@@ -97,7 +100,7 @@ internal static class TextExpander
         }
         finally
         {
-            KeyInterceptor.IsSuppressed = false;
+            KeyInterceptor.IsSuppressed = previousSuppression;
         }
     }
 
@@ -122,33 +125,33 @@ internal static class TextExpander
             .Replace("{year}", DateTime.Now.Year.ToString())
             .Replace("{clipboard}", ReadClipboardSafe());
 
-        bool prompted = false;
         text = Regex.Replace(text, @"\{input(?::([^}]*))?\}", match =>
         {
             cancellationToken.ThrowIfCancellationRequested();
             target.ThrowIfNotForeground(cancellationToken);
-            prompted = true;
             string label = match.Groups[1].Success && match.Groups[1].Value.Length > 0
                 ? match.Groups[1].Value
                 : "Введите значение:";
-            return PromptWindow.AskText(label, cancellationToken);
+            string value = PromptWindow.AskText(label, cancellationToken);
+            target.RestoreAfterPrompt(cancellationToken);
+            return value;
         });
 
         text = Regex.Replace(text, @"\{choice:([^}]*)\}", match =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            prompted = true;
+            target.ThrowIfNotForeground(cancellationToken);
             var options = match.Groups[1].Value.Split('|',
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            return options.Length > 0
+            string value = options.Length > 0
                 ? PromptWindow.AskChoice("Выберите:", options, cancellationToken)
                 : "";
+            if (options.Length > 0)
+                target.RestoreAfterPrompt(cancellationToken);
+            return value;
         });
 
-        if (prompted)
-            target.RestoreAfterPrompt(cancellationToken);
-        else
-            target.ThrowIfNotForeground(cancellationToken);
+        target.ThrowIfNotForeground(cancellationToken);
 
         return text;
     }
@@ -202,13 +205,25 @@ internal static class TextExpander
 
     private static string ReadClipboardSafe()
     {
-        try
+        Exception? lastError = null;
+        for (int attempt = 0; attempt < 10; attempt++)
         {
-            return System.Windows.Forms.Clipboard.ContainsText()
-                ? System.Windows.Forms.Clipboard.GetText()
-                : "";
+            try
+            {
+                return System.Windows.Forms.Clipboard.ContainsText()
+                    ? System.Windows.Forms.Clipboard.GetText()
+                    : "";
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                Thread.Sleep(20);
+            }
         }
-        catch { return ""; }
+
+        throw new InvalidOperationException(
+            "Не удалось прочитать текст из буфера обмена.",
+            lastError);
     }
 
     private static void TypeUnicode(
@@ -283,7 +298,7 @@ internal static class TextExpander
     private static void SendKeyDownUp(int vkCode)
     {
         uint scanCode = NativeMethods.MapVirtualKey((uint)vkCode, NativeMethods.MAPVK_VK_TO_VSC);
-        bool extended = vkCode == VK_BACK || (vkCode >= 0x25 && vkCode <= 0x28);
+        bool extended = InputInjection.RequiresExtendedKeyFlag((ushort)vkCode);
         uint flags = extended ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u;
 
         InputInjection.Send(new[]
@@ -300,9 +315,18 @@ internal static class TextExpander
     {
         target.ThrowIfNotForeground(cancellationToken);
         ClipboardSnapshot snapshot = ClipboardSnapshot.Capture();
+        uint replacementSequence = 0;
+        bool restoreSnapshot = true;
 
         try
         {
+            if (!snapshot.IsCurrent)
+            {
+                restoreSnapshot = false;
+                throw new InvalidOperationException(
+                    "Буфер обмена изменился во время подготовки вставки. Операция отменена.");
+            }
+
             string plain = StripRtf(rtf);
             AppLog.Diagnostic($"RTF paste prepared: rtf={rtf.Length}; plain={plain.Length}");
 
@@ -326,14 +350,31 @@ internal static class TextExpander
             if (!written)
                 throw new InvalidOperationException("Не удалось подготовить форматированный текст в буфере обмена.");
 
+            replacementSequence = NativeMethods.GetClipboardSequenceNumber();
+
             Delay(50, cancellationToken);
             target.ThrowIfNotForeground(cancellationToken);
+            if (NativeMethods.GetClipboardSequenceNumber() != replacementSequence)
+            {
+                restoreSnapshot = false;
+                throw new InvalidOperationException(
+                    "Буфер обмена изменился перед вставкой. Операция отменена.");
+            }
             SendCtrlV();
             Delay(150, cancellationToken);
         }
         finally
         {
-            snapshot.Restore();
+            if (restoreSnapshot
+                && (replacementSequence == 0
+                    || NativeMethods.GetClipboardSequenceNumber() == replacementSequence))
+            {
+                snapshot.Restore();
+            }
+            else if (replacementSequence != 0)
+            {
+                AppLog.Write("Clipboard changed during RTF paste; previous snapshot was not restored");
+            }
         }
     }
 
@@ -355,9 +396,28 @@ internal static class TextExpander
 
                 IntPtr hRtf = AllocString(rtf, asAnsi: true);
                 IntPtr hText = AllocString(plain, asAnsi: false);
-                bool rtfSet = hRtf != IntPtr.Zero && NativeMethods.SetClipboardData(cfRtf, hRtf) != IntPtr.Zero;
-                bool textSet = hText != IntPtr.Zero && NativeMethods.SetClipboardData(NativeMethods.CF_UNICODETEXT, hText) != IntPtr.Zero;
-                return rtfSet && textSet;
+                if (hRtf == IntPtr.Zero || hText == IntPtr.Zero)
+                {
+                    FreeClipboardHandle(hRtf);
+                    FreeClipboardHandle(hText);
+                    return false;
+                }
+
+                if (NativeMethods.SetClipboardData(cfRtf, hRtf) == IntPtr.Zero)
+                {
+                    FreeClipboardHandle(hRtf);
+                    FreeClipboardHandle(hText);
+                    return false;
+                }
+
+                // SetClipboardData transferred ownership of hRtf to Windows.
+                if (NativeMethods.SetClipboardData(NativeMethods.CF_UNICODETEXT, hText) == IntPtr.Zero)
+                {
+                    FreeClipboardHandle(hText);
+                    return false;
+                }
+
+                return true;
             }
             finally
             {
@@ -375,15 +435,26 @@ internal static class TextExpander
             ? System.Text.Encoding.Default.GetBytes(text)
             : System.Text.Encoding.Unicode.GetBytes(text);
         int size = bytes.Length + (asAnsi ? 1 : 2);
-        IntPtr memory = NativeMethods.GlobalAlloc(0x0002, (UIntPtr)size);
+        // GMEM_MOVEABLE is required by SetClipboardData; ZEROINIT guarantees
+        // the extra byte(s) form the terminating NUL for ANSI/Unicode strings.
+        IntPtr memory = NativeMethods.GlobalAlloc(0x0042, (UIntPtr)size);
         if (memory == IntPtr.Zero) return IntPtr.Zero;
         IntPtr pointer = NativeMethods.GlobalLock(memory);
-        if (pointer != IntPtr.Zero)
+        if (pointer == IntPtr.Zero)
         {
-            Marshal.Copy(bytes, 0, pointer, bytes.Length);
-            NativeMethods.GlobalUnlock(memory);
+            NativeMethods.GlobalFree(memory);
+            return IntPtr.Zero;
         }
+
+        Marshal.Copy(bytes, 0, pointer, bytes.Length);
+        NativeMethods.GlobalUnlock(memory);
         return memory;
+    }
+
+    private static void FreeClipboardHandle(IntPtr handle)
+    {
+        if (handle != IntPtr.Zero)
+            NativeMethods.GlobalFree(handle);
     }
 
     private static string StripRtf(string rtf)

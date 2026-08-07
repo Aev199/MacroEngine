@@ -30,7 +30,7 @@ internal sealed class AppController : IDisposable
 
     private SettingsWindow? _settingsWindow;
     private bool _isRunning;
-    private uint _lastForegroundProcessId;
+    private readonly ForegroundWindowTracker _foregroundWindow = new();
     private volatile bool _suppressToast;
     private IntPtr _foregroundHook = IntPtr.Zero;
     private NativeMethods.WinEventProc? _foregroundHookProc;
@@ -154,7 +154,9 @@ internal sealed class AppController : IDisposable
 
         _executionQueue.JobFailed += (description, ex) =>
         {
-            AppLog.Write($"Action '{description}' failed: {ex.GetType().Name}: {ex.Message}");
+            // The message may include a user path, command argument or macro
+            // fragment. Keep the persisted normal log privacy-safe.
+            AppLog.Write($"Action '{description}' failed: {ex.GetType().Name}");
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 _cancelItem.IsEnabled = false;
@@ -179,9 +181,11 @@ internal sealed class AppController : IDisposable
                 _foregroundHookProc,
                 0, 0,
                 NativeMethods.WINEVENT_OUTOFCONTEXT);
+            if (_foregroundHook == IntPtr.Zero)
+                throw new InvalidOperationException("Windows не установила foreground hook.");
 
             IntPtr hWnd = NativeMethods.GetForegroundWindow();
-            NativeMethods.GetWindowThreadProcessId(hWnd, out _lastForegroundProcessId);
+            _foregroundWindow.Reset(hWnd);
 
             _isRunning = true;
             UpdateUI();
@@ -189,6 +193,15 @@ internal sealed class AppController : IDisposable
         }
         catch (Exception ex)
         {
+            _interceptor.Stop();
+            if (_foregroundHook != IntPtr.Zero)
+            {
+                NativeMethods.UnhookWinEvent(_foregroundHook);
+                _foregroundHook = IntPtr.Zero;
+            }
+            _foregroundHookProc = null;
+            _isRunning = false;
+            UpdateUI();
             AppLog.Write($"Engine start failed: {ex.GetType().Name}: {ex.Message}");
             _overlay.ShowToast($"Ошибка запуска перехвата: {ex.Message}", 6000);
         }
@@ -205,6 +218,7 @@ internal sealed class AppController : IDisposable
             NativeMethods.UnhookWinEvent(_foregroundHook);
             _foregroundHook = IntPtr.Zero;
         }
+        _foregroundHookProc = null;
         _inputBuffer.Clear();
         _isRunning = false;
         UpdateUI();
@@ -306,11 +320,8 @@ internal sealed class AppController : IDisposable
     {
         if (!_isRunning) return;
 
-        NativeMethods.GetWindowThreadProcessId(hWnd, out uint currentPid);
-        if (currentPid != 0 && _lastForegroundProcessId != 0 && currentPid != _lastForegroundProcessId)
+        if (_foregroundWindow.Update(hWnd))
             _inputBuffer.Clear();
-        if (currentPid != 0)
-            _lastForegroundProcessId = currentPid;
     }
 
     private void OnTriggerMatched(TriggerEntry entry)
@@ -338,8 +349,19 @@ internal sealed class AppController : IDisposable
 
         bool accepted = _executionQueue.TryEnqueue(action, cancellationToken =>
         {
-            target.ThrowIfNotForeground(cancellationToken);
-            ExecuteAction(entry, action, eraseLength, target, cancellationToken);
+            bool previousSuppression = KeyInterceptor.IsSuppressed;
+            KeyInterceptor.IsSuppressed = true;
+            try
+            {
+                target.ThrowIfNotForeground(cancellationToken);
+                if (activation != "text")
+                    WaitForActivationModifiersReleased(target, cancellationToken);
+                ExecuteAction(entry, action, eraseLength, target, cancellationToken);
+            }
+            finally
+            {
+                KeyInterceptor.IsSuppressed = previousSuppression;
+            }
         });
 
         if (!accepted)
@@ -394,6 +416,7 @@ internal sealed class AppController : IDisposable
         AutomationTarget target,
         CancellationToken cancellationToken)
     {
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
         KeyInterceptor.IsSuppressed = true;
         try
         {
@@ -401,11 +424,14 @@ internal sealed class AppController : IDisposable
             TextExpander.EraseChars(eraseLength, target, cancellationToken);
             string path = TextExpander.ResolveTokens(rawPath, target, cancellationToken).Trim();
             cancellationToken.ThrowIfCancellationRequested();
-            Process.Start("explorer.exe", path);
+            Process? process = Process.Start("explorer.exe", path);
+            if (process == null)
+                throw new InvalidOperationException("Windows не смогла открыть указанный путь.");
+            process.Dispose();
         }
         finally
         {
-            KeyInterceptor.IsSuppressed = false;
+            KeyInterceptor.IsSuppressed = previousSuppression;
         }
     }
 
@@ -415,6 +441,7 @@ internal sealed class AppController : IDisposable
         AutomationTarget target,
         CancellationToken cancellationToken)
     {
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
         KeyInterceptor.IsSuppressed = true;
         try
         {
@@ -424,18 +451,49 @@ internal sealed class AppController : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
 
             CommandLineParser.Split(command, out string fileName, out string arguments);
-            Process.Start(new ProcessStartInfo
+            Process? process = Process.Start(new ProcessStartInfo
             {
                 FileName = fileName,
                 Arguments = arguments,
                 UseShellExecute = true
             });
+            if (process == null)
+                throw new InvalidOperationException("Windows не смогла запустить указанную команду.");
+            process.Dispose();
         }
         finally
         {
-            KeyInterceptor.IsSuppressed = false;
+            KeyInterceptor.IsSuppressed = previousSuppression;
         }
     }
+
+    private static void WaitForActivationModifiersReleased(
+        AutomationTarget target,
+        CancellationToken cancellationToken)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(3);
+        while (IsActivationModifierDown())
+        {
+            target.ThrowIfNotForeground(cancellationToken);
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new OperationCanceledException(
+                    "Сочетание удерживается слишком долго — запуск отменён.",
+                    cancellationToken);
+            }
+
+            if (cancellationToken.WaitHandle.WaitOne(10))
+                cancellationToken.ThrowIfCancellationRequested();
+        }
+    }
+
+    private static bool IsActivationModifierDown() =>
+        (NativeMethods.GetAsyncKeyState(0x11) & 0x8000) != 0
+        || (NativeMethods.GetAsyncKeyState(0x12) & 0x8000) != 0
+        || (NativeMethods.GetAsyncKeyState(0x10) & 0x8000) != 0
+        || (NativeMethods.GetAsyncKeyState(0x5B) & 0x8000) != 0
+        || (NativeMethods.GetAsyncKeyState(0x5C) & 0x8000) != 0;
+
     private void OnConfigChanged(List<TriggerEntry> newTriggers)
     {
         _inputBuffer.LoadTriggers(newTriggers);

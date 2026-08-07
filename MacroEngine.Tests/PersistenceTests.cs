@@ -68,6 +68,36 @@ public sealed class PersistenceTests : IDisposable
         Assert.Equal("key Ctrl+S", macro.Script);
     }
 
+    [Fact]
+    public void TriggerConfig_ExplicitNullFieldsAreNormalized()
+    {
+        string path = Path.Combine(_directory, "nullable-triggers.json");
+        File.WriteAllText(path,
+            "[{\"trigger\":null,\"value\":null,\"context\":null,\"action\":null}]");
+        using var config = new TriggerConfig(path);
+
+        TriggerEntry entry = Assert.Single(config.Load());
+
+        Assert.Equal(string.Empty, entry.Trigger);
+        Assert.Equal(string.Empty, entry.Value);
+        Assert.Equal("*", entry.Context);
+        Assert.Equal("text", entry.Action);
+    }
+
+    [Fact]
+    public void MacroLibrary_ExplicitNullCollectionsAreNormalized()
+    {
+        string path = Path.Combine(_directory, "nullable-macros.json");
+        File.WriteAllText(path, "[{\"name\":null,\"steps\":null}]");
+        using var library = new MacroLibrary(path);
+
+        MacroDef macro = Assert.Single(library.Load());
+
+        Assert.Equal(string.Empty, macro.Name);
+        Assert.Empty(macro.Steps);
+        Assert.Equal(string.Empty, macro.Script);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_directory, recursive: true); } catch { }

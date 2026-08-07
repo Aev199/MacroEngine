@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text;
 using MacroEngine.Core;
 
 namespace MacroEngine.Modules;
@@ -33,10 +32,18 @@ internal static class ScriptRunner
             using var process = Process.Start(psi)
                 ?? throw new InvalidOperationException("The script process could not be started.");
 
-            var stdout = new StringBuilder();
-            var stderr = new StringBuilder();
-            process.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
-            process.ErrorDataReceived += (_, e) => { if (e.Data != null) stderr.AppendLine(e.Data); };
+            long stdoutChars = 0;
+            long stderrChars = 0;
+            process.OutputDataReceived += (_, e) =>
+            {
+                if (e.Data != null)
+                    Interlocked.Add(ref stdoutChars, e.Data.Length + Environment.NewLine.Length);
+            };
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data != null)
+                    Interlocked.Add(ref stderrChars, e.Data.Length + Environment.NewLine.Length);
+            };
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
@@ -59,10 +66,10 @@ internal static class ScriptRunner
             process.WaitForExit();
 
             AppLog.Write($"Script completed with exit code {process.ExitCode}");
-            if (stdout.Length > 0)
-                AppLog.Diagnostic("Script stdout: " + Truncate(stdout.ToString().Trim(), 500));
-            if (stderr.Length > 0)
-                AppLog.Diagnostic("Script stderr: " + Truncate(stderr.ToString().Trim(), 500));
+            if (Interlocked.Read(ref stdoutChars) > 0)
+                AppLog.Diagnostic($"Script stdout captured: chars={Interlocked.Read(ref stdoutChars)}");
+            if (Interlocked.Read(ref stderrChars) > 0)
+                AppLog.Diagnostic($"Script stderr captured: chars={Interlocked.Read(ref stderrChars)}");
 
             if (process.ExitCode != 0)
                 throw new InvalidOperationException($"Script exited with code {process.ExitCode}.");
@@ -85,7 +92,4 @@ internal static class ScriptRunner
         }
         catch { }
     }
-
-    private static string Truncate(string value, int max) =>
-        value.Length <= max ? value : value[..max] + "…";
 }

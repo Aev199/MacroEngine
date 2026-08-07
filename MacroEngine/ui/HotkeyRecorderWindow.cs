@@ -131,6 +131,14 @@ internal sealed class HotkeyRecorderWindow : Window
         {
             string combo = string.Join("+", _capturedMods.Append(_mainKey));
 
+            if (!HotkeyRules.TryValidateShortcut(combo, out string validationError))
+            {
+                _label.Text = $"{combo} — недоступно.\n{validationError}";
+                _capturedMods.Clear();
+                _mainKey = "";
+                return;
+            }
+
             // System hotkeys have the highest priority and cannot be assigned.
             if (SystemHotkeys.IsSystem(combo))
             {

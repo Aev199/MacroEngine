@@ -184,6 +184,9 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GlobalUnlock(IntPtr hMem);
 
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GlobalFree(IntPtr hMem);
+
     /// <summary>Register a custom clipboard format, or get existing ID.</summary>
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern uint RegisterClipboardFormat(string lpszFormat);

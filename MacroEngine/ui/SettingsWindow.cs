@@ -626,6 +626,10 @@ internal sealed class SettingsWindow : Window
                 error = $"Строка {i + 1}: сочетание клавиш не записано.";
             else if (type == "Лидер" && trigger.Length == 0)
                 error = $"Строка {i + 1}: для лидера укажите остаток в поле «Триггер» (например gm).";
+            else if (type == "Шорткат" && !HotkeyRules.TryValidateShortcut(hotkey, out string shortcutError))
+                error = $"Строка {i + 1}: {shortcutError}";
+            else if (type == "Лидер" && !HotkeyRules.TryValidateLeader(hotkey, out string leaderError))
+                error = $"Строка {i + 1}: {leaderError}";
             else if (type == "Шорткат" && SystemHotkeys.IsSystem(hotkey))
                 error = $"Строка {i + 1}: «{hotkey}» — системное сочетание, его нельзя назначить.";
             else if (type == "Лидер" && SystemHotkeys.IsSystem($"{hotkey}+{trigger}"))
@@ -688,7 +692,10 @@ internal sealed class SettingsWindow : Window
 
                 if (!string.IsNullOrEmpty(a.Hotkey)
                     && !string.IsNullOrEmpty(b.Hotkey)
-                    && string.Equals(a.Hotkey, b.Hotkey, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        HotkeyRules.Normalize(a.Hotkey),
+                        HotkeyRules.Normalize(b.Hotkey),
+                        StringComparison.OrdinalIgnoreCase)
                     && ContextsOverlap(a.Context, b.Context))
                 {
                     conflicts.Add($"Строки {i + 1} и {j + 1}: шорткат «{a.Hotkey}»");
@@ -696,7 +703,10 @@ internal sealed class SettingsWindow : Window
 
                 if (!string.IsNullOrEmpty(a.Leader)
                     && !string.IsNullOrEmpty(b.Leader)
-                    && string.Equals(a.Leader, b.Leader, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        HotkeyRules.Normalize(a.Leader),
+                        HotkeyRules.Normalize(b.Leader),
+                        StringComparison.OrdinalIgnoreCase)
                     && a.Trigger == b.Trigger
                     && ContextsOverlap(a.Context, b.Context))
                 {
@@ -1021,12 +1031,11 @@ internal sealed class SettingsWindow : Window
         _closingGuardActive = true;
         try
         {
-            bool save = await ConfirmDialog.Show(this,
-                "Есть несохранённые изменения. Сохранить перед закрытием?",
-                yes: "Сохранить",
-                no: "Не сохранять");
+            UnsavedChangesChoice choice = await UnsavedChangesDialog.Show(this);
+            if (choice == UnsavedChangesChoice.Cancel)
+                return;
 
-            if (save)
+            if (choice == UnsavedChangesChoice.Save)
             {
                 if (_macroDirty && !await SaveMacrosAsync())
                     return;

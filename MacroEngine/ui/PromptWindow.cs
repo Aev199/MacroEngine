@@ -67,7 +67,7 @@ internal sealed class PromptWindow : Window
         var ok = new Button { Content = "OK", Width = 90, IsDefault = true };
         var cancel = new Button { Content = "Отмена", Width = 90, IsCancel = true };
         ok.Click += (_, _) => Complete(CurrentValue());
-        cancel.Click += (_, _) => Complete("");
+        cancel.Click += (_, _) => CancelPrompt("Ввод отменён пользователем.");
 
         var buttons = new StackPanel
         {
@@ -89,7 +89,7 @@ internal sealed class PromptWindow : Window
         {
             if (--_remaining <= 0)
             {
-                Complete("");
+                CancelPrompt("Время ожидания ввода истекло.");
                 return;
             }
 
@@ -107,7 +107,7 @@ internal sealed class PromptWindow : Window
 
         Activated += (_, _) => ResetCountdown();
         Opened += (_, _) => input.Focus();
-        Closed += (_, _) => Complete("");
+        Closed += (_, _) => CancelPrompt("Ввод отменён пользователем.", closeWindow: false);
     }
 
     private string CurrentValue() =>
@@ -130,6 +130,18 @@ internal sealed class PromptWindow : Window
         _cancellationRegistration.Dispose();
         _result.TrySetResult(value);
         Close();
+    }
+
+    private void CancelPrompt(string reason, bool closeWindow = true)
+    {
+        if (_completed) return;
+
+        _completed = true;
+        _countdown.Stop();
+        _cancellationRegistration.Dispose();
+        _result.TrySetException(new OperationCanceledException(reason));
+        if (closeWindow)
+            Close();
     }
 
     private void CloseAfterCancellation()

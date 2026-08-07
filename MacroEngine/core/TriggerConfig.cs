@@ -30,7 +30,7 @@ internal sealed class TriggerConfig : IDisposable
 
         try
         {
-            return AtomicJsonFile.LoadStable<List<TriggerEntry>>(_configPath);
+            return Normalize(AtomicJsonFile.LoadStable<List<TriggerEntry>>(_configPath));
         }
         catch (Exception ex)
         {
@@ -39,7 +39,7 @@ internal sealed class TriggerConfig : IDisposable
             if (AtomicJsonFile.TryRestoreBackup<List<TriggerEntry>>(_configPath, out var backup))
             {
                 AppLog.Write("Trigger config recovered from backup; valid backup preserved");
-                return backup;
+                return Normalize(backup);
             }
 
             return new List<TriggerEntry>();
@@ -47,7 +47,8 @@ internal sealed class TriggerConfig : IDisposable
     }
 
     /// <summary>Save triggers or throw when the data cannot be persisted safely.</summary>
-    public void Save(List<TriggerEntry> triggers) => AtomicJsonFile.Save(_configPath, triggers);
+    public void Save(List<TriggerEntry> triggers) =>
+        AtomicJsonFile.Save(_configPath, Normalize(triggers));
 
     public void StartWatching()
     {
@@ -99,6 +100,27 @@ internal sealed class TriggerConfig : IDisposable
         new() { Trigger = "!beam", Value = "C:\\lisp\\my_beam_routines.lsp", Context = "acad", Action = "lisp" },
         new() { Trigger = "!vb", Value = "python C:\\scripts\\midas_virtual_beams.py", Context = "midas", Action = "script", Hotkey = "Ctrl+Shift+M" },
     ];
+
+    private static List<TriggerEntry> Normalize(List<TriggerEntry> entries)
+    {
+        var result = new List<TriggerEntry>(entries.Count);
+        foreach (TriggerEntry? entry in entries)
+        {
+            if (entry == null)
+                continue;
+
+            entry.Trigger ??= string.Empty;
+            entry.Value ??= string.Empty;
+            entry.Context ??= "*";
+            entry.Action ??= "text";
+            result.Add(entry);
+        }
+
+        if (result.Count != entries.Count)
+            AppLog.Write("Trigger config contained null entries; invalid rows were ignored");
+
+        return result;
+    }
 
     public void Dispose()
     {

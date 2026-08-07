@@ -10,14 +10,26 @@ namespace MacroEngine.Core;
 /// </summary>
 internal sealed class ClipboardSnapshot
 {
+    private sealed class UnsafeClipboardFormatException : Exception
+    {
+        public UnsafeClipboardFormatException(string message) : base(message) { }
+    }
+
     private readonly List<(string Format, object Data)> _items;
     private readonly bool _wasEmpty;
+    private readonly uint _sequenceNumber;
 
-    private ClipboardSnapshot(List<(string Format, object Data)> items, bool wasEmpty)
+    private ClipboardSnapshot(
+        List<(string Format, object Data)> items,
+        bool wasEmpty,
+        uint sequenceNumber)
     {
         _items = items;
         _wasEmpty = wasEmpty;
+        _sequenceNumber = sequenceNumber;
     }
+
+    public bool IsCurrent => NativeMethods.GetClipboardSequenceNumber() == _sequenceNumber;
 
     public static ClipboardSnapshot Capture()
     {
@@ -26,19 +38,43 @@ internal sealed class ClipboardSnapshot
         {
             try
             {
+                uint sequenceBefore = NativeMethods.GetClipboardSequenceNumber();
                 IDataObject? source = Clipboard.GetDataObject();
                 if (source == null)
-                    return new ClipboardSnapshot(new(), wasEmpty: true);
+                {
+                    uint emptySequence = NativeMethods.GetClipboardSequenceNumber();
+                    if (emptySequence != sequenceBefore)
+                        throw new IOException("Clipboard changed while it was being captured.");
+                    return new ClipboardSnapshot(new(), wasEmpty: true, emptySequence);
+                }
 
                 var items = new List<(string Format, object Data)>();
                 foreach (string format in source.GetFormats(autoConvert: false).Distinct(StringComparer.Ordinal))
                 {
                     object? data = source.GetData(format, autoConvert: false);
-                    if (data != null)
-                        items.Add((format, CloneKnownData(data)));
+                    if (data == null)
+                    {
+                        throw new UnsafeClipboardFormatException(
+                            $"Формат «{format}» объявлен, но его данные недоступны.");
+                    }
+
+                    items.Add((format, CloneKnownData(data, format)));
                 }
 
-                return new ClipboardSnapshot(items, wasEmpty: items.Count == 0);
+                uint sequenceAfter = NativeMethods.GetClipboardSequenceNumber();
+                if (sequenceAfter != sequenceBefore)
+                    throw new IOException("Clipboard changed while it was being captured.");
+
+                return new ClipboardSnapshot(
+                    items,
+                    wasEmpty: items.Count == 0,
+                    sequenceAfter);
+            }
+            catch (UnsafeClipboardFormatException ex)
+            {
+                throw new InvalidOperationException(
+                    "Буфер обмена содержит формат, который нельзя безопасно сохранить. Операция отменена.",
+                    ex);
             }
             catch (Exception ex)
             {
@@ -67,7 +103,7 @@ internal sealed class ClipboardSnapshot
 
                 var restored = new DataObject();
                 foreach (var (format, data) in _items)
-                    restored.SetData(format, autoConvert: false, CloneKnownData(data));
+                    restored.SetData(format, autoConvert: false, CloneKnownData(data, format));
 
                 Clipboard.SetDataObject(restored, copy: true, retryTimes: 10, retryDelay: 50);
                 return;
@@ -84,16 +120,52 @@ internal sealed class ClipboardSnapshot
             lastError);
     }
 
-    private static object CloneKnownData(object data) => data switch
+    private static object CloneKnownData(object data, string format)
     {
-        byte[] bytes => bytes.ToArray(),
-        string[] strings => strings.ToArray(),
-        MemoryStream stream => new MemoryStream(stream.ToArray(), writable: false),
-        StringCollection collection => CloneCollection(collection),
-        Image image => image.Clone(),
-        ICloneable cloneable => cloneable.Clone() ?? data,
-        _ => data
-    };
+        object? clone = data switch
+        {
+            string text => text,
+            byte[] bytes => bytes.ToArray(),
+            string[] strings => strings.ToArray(),
+            Stream stream => CloneStream(stream),
+            StringCollection collection => CloneCollection(collection),
+            Image image => image.Clone(),
+            _ when data.GetType().IsValueType => data,
+            _ => null
+        };
+
+        if (clone == null)
+        {
+            throw new UnsafeClipboardFormatException(
+                $"Формат «{format}» использует неподдерживаемый тип {data.GetType().FullName}.");
+        }
+
+        return clone;
+    }
+
+    private static MemoryStream CloneStream(Stream source)
+    {
+        if (!source.CanRead || !source.CanSeek)
+        {
+            throw new UnsafeClipboardFormatException(
+                "Поток данных clipboard нельзя безопасно прочитать и вернуть в исходное состояние.");
+        }
+
+        long originalPosition = source.Position;
+        try
+        {
+            source.Position = 0;
+
+            var clone = new MemoryStream();
+            source.CopyTo(clone);
+            clone.Position = 0;
+            return clone;
+        }
+        finally
+        {
+            source.Position = originalPosition;
+        }
+    }
 
     private static StringCollection CloneCollection(StringCollection source)
     {

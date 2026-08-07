@@ -103,7 +103,7 @@ internal sealed class HelpWindow : Window
 
         panel.Children.Add(Section("2. Выберите способ запуска"));
         panel.Children.Add(Bullet("Текст — срабатывает после набора последовательности символов."));
-        panel.Children.Add(Bullet("Шорткат — прямое сочетание Ctrl/Alt/Shift + клавиша или F-клавиша."));
+        panel.Children.Add(Bullet("Шорткат — Ctrl или Alt с клавишей; F1–F24 можно назначать отдельно."));
         panel.Children.Add(Bullet("Лидер — удерживаемый аккорд из 2–3 модификаторов и короткая последовательность клавиш."));
 
         panel.Children.Add(Section("3. Ограничьте контекст"));

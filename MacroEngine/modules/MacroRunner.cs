@@ -17,6 +17,7 @@ internal static class MacroRunner
         AutomationTarget target,
         CancellationToken cancellationToken = default)
     {
+        bool previousSuppression = KeyInterceptor.IsSuppressed;
         KeyInterceptor.IsSuppressed = true;
         try
         {
@@ -46,14 +47,16 @@ internal static class MacroRunner
                 }
                 catch (Exception ex)
                 {
-                    AppLog.Write($"Macro step '{verb}' failed: {ex.GetType().Name}: {ex.Message}");
+                    // Do not persist step arguments or exception messages: they
+                    // may contain user macro text, paths or command arguments.
+                    AppLog.Write($"Macro step '{verb}' failed: {ex.GetType().Name}");
                     throw new InvalidOperationException($"Ошибка шага макроса «{verb}»: {ex.Message}", ex);
                 }
             }
         }
         finally
         {
-            KeyInterceptor.IsSuppressed = false;
+            KeyInterceptor.IsSuppressed = previousSuppression;
         }
     }
 
@@ -123,9 +126,12 @@ internal static class MacroRunner
                 case "shift":                mods.Add(0x10); break;
                 case "win":                  mods.Add(0x5B); break;
                 default:
-                    main = NameToVk(p);
-                    if (main == 0)
+                    ushort parsed = NameToVk(p);
+                    if (parsed == 0)
                         throw new FormatException($"Неизвестная клавиша: {p}");
+                    if (main != 0)
+                        throw new FormatException("Сочетание должно содержать только одну основную клавишу.");
+                    main = parsed;
                     break;
             }
         }
@@ -145,7 +151,7 @@ internal static class MacroRunner
     private static NativeMethods.INPUT KeyInput(ushort vk, bool up)
     {
         uint scan = NativeMethods.MapVirtualKey(vk, NativeMethods.MAPVK_VK_TO_VSC);
-        bool extended = vk == 0x08 || (vk >= 0x21 && vk <= 0x2E) || vk == 0x5B || vk == 0x5C;
+        bool extended = InputInjection.RequiresExtendedKeyFlag(vk);
         uint flags = (extended ? NativeMethods.KEYEVENTF_EXTENDEDKEY : 0u)
                    | (up ? NativeMethods.KEYEVENTF_KEYUP : 0u);
         return new NativeMethods.INPUT
@@ -254,11 +260,16 @@ internal static class MacroRunner
     private static void Launch(string command)
     {
         CommandLineParser.Split(command, out string fileName, out string arguments);
-        Process.Start(new ProcessStartInfo
+        Process? process = Process.Start(new ProcessStartInfo
         {
             FileName = fileName,
             Arguments = arguments,
             UseShellExecute = true
         });
+
+        if (process == null)
+            throw new InvalidOperationException("Windows не смогла запустить указанную команду.");
+
+        process.Dispose();
     }
 }

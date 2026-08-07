@@ -40,7 +40,7 @@ internal sealed class MacroLibrary : IDisposable
 
         try
         {
-            var list = AtomicJsonFile.LoadStable<List<MacroDef>>(_path);
+            var list = Normalize(AtomicJsonFile.LoadStable<List<MacroDef>>(_path));
             Index(list);
             return list;
         }
@@ -51,6 +51,7 @@ internal sealed class MacroLibrary : IDisposable
             if (AtomicJsonFile.TryRestoreBackup<List<MacroDef>>(_path, out var backup))
             {
                 AppLog.Write("Macro library recovered from backup; valid backup preserved");
+                backup = Normalize(backup);
                 Index(backup);
                 return backup;
             }
@@ -63,7 +64,7 @@ internal sealed class MacroLibrary : IDisposable
     /// <summary>Save macros or throw when the data cannot be persisted safely.</summary>
     public void Save(IEnumerable<MacroDef> macros)
     {
-        var list = macros.ToList();
+        var list = Normalize(macros.ToList());
         AtomicJsonFile.Save(_path, list);
         Index(list);
     }
@@ -109,6 +110,27 @@ internal sealed class MacroLibrary : IDisposable
             .Where(m => !string.IsNullOrWhiteSpace(m.Name))
             .GroupBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static List<MacroDef> Normalize(List<MacroDef> macros)
+    {
+        var result = new List<MacroDef>(macros.Count);
+        foreach (MacroDef? macro in macros)
+        {
+            if (macro == null)
+                continue;
+
+            macro.Name ??= string.Empty;
+            macro.Steps = macro.Steps?
+                .Select(step => step ?? string.Empty)
+                .ToList() ?? new List<string>();
+            result.Add(macro);
+        }
+
+        if (result.Count != macros.Count)
+            AppLog.Write("Macro library contained null entries; invalid rows were ignored");
+
+        return result;
     }
 
     public void Dispose()

@@ -150,7 +150,15 @@ internal sealed class KeyInterceptor : IDisposable
                     return (IntPtr)1;
                 }
 
-                KeyPressed?.Invoke(args);
+                try
+                {
+                    KeyPressed?.Invoke(args);
+                }
+                catch (Exception ex)
+                {
+                    SuppressKey = false;
+                    AppLog.Write($"Keyboard hook handler failed: {ex.GetType().Name}: {ex.Message}");
+                }
 
                 if (SuppressKey)
                 {

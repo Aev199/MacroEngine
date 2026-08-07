@@ -211,8 +211,7 @@ internal sealed class InputBuffer
         return isPrefix;
     }
 
-    private static string NormalizeHotkey(string hotkey) =>
-        hotkey.Replace(" ", "").ToLowerInvariant();
+    private static string NormalizeHotkey(string hotkey) => HotkeyRules.Normalize(hotkey);
 
     public void Feed(KeyEventData key, string? windowFingerprint = null)
     {
