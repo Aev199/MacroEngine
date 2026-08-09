@@ -2,10 +2,17 @@ name: Build
 
 on:
   push:
+    branches:
+      - master
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows:
@@ -35,12 +42,13 @@ jobs:
           exit $exitCode
 
       - name: Upload test diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: MacroEngine-test-diagnostics
           path: artifacts/test-results/
           if-no-files-found: ignore
+          retention-days: 3
 
       - name: Build
         run: dotnet build MacroEngine/MacroEngine.csproj -c Release --no-restore
@@ -55,7 +63,9 @@ jobs:
           -o artifacts/win-x64
 
       - name: Upload executable
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master'
         uses: actions/upload-artifact@v4
         with:
           name: MacroEngine-win-x64
           path: artifacts/win-x64/
+          retention-days: 7
