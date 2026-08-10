@@ -62,10 +62,22 @@ jobs:
           -p:PublishSingleFile=true
           -o artifacts/win-x64
 
-      - name: Upload executable
-        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master'
+      - name: Read product version
+        id: product
+        shell: pwsh
+        run: |
+          $project = Get-Content MacroEngine/MacroEngine.csproj -Raw
+          $match = [regex]::Match($project, '<Version>([^<]+)</Version>')
+          if (-not $match.Success) {
+            throw 'Version was not found in MacroEngine.csproj.'
+          }
+          "version=$($match.Groups[1].Value)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload ready Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: MacroEngine-win-x64
+          name: MacroEngine-${{ steps.product.outputs.version }}-win-x64
           path: artifacts/win-x64/
+          if-no-files-found: error
           retention-days: 7
+          compression-level: 9
