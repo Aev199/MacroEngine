@@ -8,9 +8,8 @@ using Avalonia.Themes.Fluent;
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Avalonia application: dark Fluent theme with a teal accent
-/// (matches the tray icon). The app has no main window — it lives
-/// in the tray via <see cref="AppController"/>.
+/// Avalonia application shell. MacroEngine deliberately stays close to native
+/// Fluent controls, with a restrained accent reserved for primary actions and selection.
 /// </summary>
 internal sealed class App : Application
 {
@@ -27,14 +26,14 @@ internal sealed class App : Application
 
         RequestedThemeVariant = ThemeVariant.Dark;
 
-        // Teal accent instead of the OS accent color.
-        Resources["SystemAccentColor"] = Color.Parse("#00D2A0");
-        Resources["SystemAccentColorDark1"] = Color.Parse("#00B78C");
-        Resources["SystemAccentColorDark2"] = Color.Parse("#009C78");
-        Resources["SystemAccentColorDark3"] = Color.Parse("#008164");
-        Resources["SystemAccentColorLight1"] = Color.Parse("#2BDCAF");
-        Resources["SystemAccentColorLight2"] = Color.Parse("#56E5BE");
-        Resources["SystemAccentColorLight3"] = Color.Parse("#81EECD");
+        // Muted teal: enough to identify the product without making every control decorative.
+        Resources["SystemAccentColor"] = Color.Parse("#52B8A2");
+        Resources["SystemAccentColorDark1"] = Color.Parse("#459E8B");
+        Resources["SystemAccentColorDark2"] = Color.Parse("#398373");
+        Resources["SystemAccentColorDark3"] = Color.Parse("#2E685C");
+        Resources["SystemAccentColorLight1"] = Color.Parse("#70C6B4");
+        Resources["SystemAccentColorLight2"] = Color.Parse("#8DD3C4");
+        Resources["SystemAccentColorLight3"] = Color.Parse("#AADFD4");
     }
 
     public override void OnFrameworkInitializationCompleted()

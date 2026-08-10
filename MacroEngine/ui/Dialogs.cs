@@ -5,15 +5,15 @@ using Avalonia.Media;
 
 namespace MacroEngine.UI;
 
-/// <summary>Simple OK message dialog (Avalonia has no built-in MessageBox).</summary>
+/// <summary>Compact one-action message dialog.</summary>
 internal static class MessageDialog
 {
     public static async Task Show(Window owner, string title, string message)
     {
-        var ok = new Button
+        var close = new Button
         {
-            Content = "OK",
-            Width = 90,
+            Content = "Закрыть",
+            MinWidth = 88,
             IsDefault = true,
             HorizontalAlignment = HorizontalAlignment.Right
         };
@@ -29,29 +29,38 @@ internal static class MessageDialog
             Icon = AppIcon.Get(),
             Content = new StackPanel
             {
-                Margin = new Thickness(20),
-                Spacing = 16,
+                Margin = new Thickness(16),
+                Spacing = 14,
                 Children =
                 {
                     new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
-                    ok
+                    close
                 }
             }
         };
 
-        ok.Click += (_, _) => win.Close();
+        close.Click += (_, _) => win.Close();
         await win.ShowDialog(owner);
     }
 }
 
-/// <summary>Yes/No confirmation dialog. Returns true when confirmed.</summary>
+/// <summary>Two-action confirmation dialog. Returns true when confirmed.</summary>
 internal static class ConfirmDialog
 {
-    public static async Task<bool> Show(Window owner, string message,
-                                        string yes = "Да", string no = "Отмена")
+    public static async Task<bool> Show(
+        Window owner,
+        string message,
+        string yes = "Да",
+        string no = "Отмена")
     {
-        var btnYes = new Button { Content = yes, Width = 110, IsDefault = true, Classes = { "accent" } };
-        var btnNo = new Button { Content = no, Width = 110, IsCancel = true };
+        var btnYes = new Button
+        {
+            Content = yes,
+            MinWidth = 96,
+            IsDefault = true,
+            Classes = { "accent" }
+        };
+        var btnNo = new Button { Content = no, MinWidth = 88, IsCancel = true };
 
         var win = new Window
         {
@@ -64,8 +73,8 @@ internal static class ConfirmDialog
             Icon = AppIcon.Get(),
             Content = new StackPanel
             {
-                Margin = new Thickness(20),
-                Spacing = 16,
+                Margin = new Thickness(16),
+                Spacing = 14,
                 Children =
                 {
                     new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
@@ -104,12 +113,12 @@ internal static class UnsavedChangesDialog
         var save = new Button
         {
             Content = "Сохранить",
-            Width = 110,
+            MinWidth = 96,
             IsDefault = true,
             Classes = { "accent" }
         };
-        var discard = new Button { Content = "Не сохранять", Width = 120 };
-        var cancel = new Button { Content = "Отмена", Width = 100, IsCancel = true };
+        var discard = new Button { Content = "Не сохранять", MinWidth = 112 };
+        var cancel = new Button { Content = "Отмена", MinWidth = 88, IsCancel = true };
 
         var win = new Window
         {
@@ -122,8 +131,8 @@ internal static class UnsavedChangesDialog
             Icon = AppIcon.Get(),
             Content = new StackPanel
             {
-                Margin = new Thickness(20),
-                Spacing = 16,
+                Margin = new Thickness(16),
+                Spacing = 14,
                 Children =
                 {
                     new TextBlock

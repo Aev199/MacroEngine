@@ -9,11 +9,14 @@ namespace MacroEngine.UI;
 /// <summary>Offline help backed by the README embedded in the executable.</summary>
 internal sealed class HelpWindow : Window
 {
+    private static readonly FontFamily MonoFont =
+        new("Cascadia Mono,Consolas,monospace");
+
     public HelpWindow(Action openAbout)
     {
         Title = $"MacroEngine {ProductInfo.DisplayVersion} — Справка";
-        Width = 820;
-        Height = 650;
+        Width = 800;
+        Height = 620;
         MinWidth = 620;
         MinHeight = 460;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -23,25 +26,29 @@ internal sealed class HelpWindow : Window
         {
             Items =
             {
-                new TabItem { Header = "Быстрый старт", Content = BuildQuickStart() },
-                new TabItem { Header = "README", Content = BuildReadme() },
+                new TabItem { Header = "Кратко", Content = BuildQuickReference() },
+                new TabItem { Header = "README", Content = BuildReadme() }
             }
         };
 
-        var data = new Button { Content = "Папка данных", Classes = { "accent" } };
+        var data = new Button { Content = "Папка данных" };
         var about = new Button { Content = "О программе" };
         var close = new Button { Content = "Закрыть", IsCancel = true };
         var status = new TextBlock
         {
-            Opacity = 0.7,
+            Opacity = 0.58,
+            FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
             TextWrapping = TextWrapping.Wrap,
-            Text = "Настройки открываются левым кликом по иконке MacroEngine в трее."
+            Text = "Настройки: левый клик по значку MacroEngine в трее."
         };
 
         about.Click += (_, _) => openAbout();
         close.Click += (_, _) => Close();
-        data.Click += (_, _) => Run(status, () => ShellTools.OpenDirectory(AppPaths.RootDirectory), "Папка данных открыта.");
+        data.Click += (_, _) => Run(
+            status,
+            () => ShellTools.OpenDirectory(AppPaths.RootDirectory),
+            "Папка данных открыта.");
 
         var footer = new Grid
         {
@@ -76,97 +83,92 @@ internal sealed class HelpWindow : Window
             IsReadOnly = true,
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
-            FontFamily = new FontFamily("Cascadia Mono,Consolas,monospace"),
-            Margin = new Thickness(12),
-            Padding = new Thickness(12)
+            Margin = new Thickness(10),
+            Padding = new Thickness(10)
         };
 
         return readme;
     }
 
-    private static Control BuildQuickStart()
+    private static Control BuildQuickReference()
     {
         var panel = new StackPanel
         {
             Margin = new Thickness(20),
-            Spacing = 12
+            Spacing = 14
         };
 
-        panel.Children.Add(TitleText("MacroEngine — локальная автоматизация Windows"));
-        panel.Children.Add(Paragraph(
-            "Программа живёт в системном трее. Левый клик открывает настройки, правый — меню управления, справку, папки данных и аварийную остановку."));
+        panel.Children.Add(new TextBlock
+        {
+            Text = "MacroEngine",
+            FontSize = 23,
+            FontWeight = FontWeight.SemiBold
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Текстовые триггеры, сочетания клавиш и последовательные макросы.",
+            Opacity = 0.68,
+            TextWrapping = TextWrapping.Wrap
+        });
 
-        panel.Children.Add(Section("1. Создайте триггер"));
-        panel.Children.Add(Paragraph(
-            "В настройках добавьте строку, выберите тип и действие. Для обычной подстановки используйте тип «Текст», например !mail → адрес электронной почты."));
-        panel.Children.Add(Code("!mail   →   name@example.com\n!date   →   {date}\n!sig    →   С уважением,\\nИмя"));
-
-        panel.Children.Add(Section("2. Выберите способ запуска"));
-        panel.Children.Add(Bullet("Текст — срабатывает после набора последовательности символов."));
-        panel.Children.Add(Bullet("Шорткат — Ctrl или Alt с клавишей; F1–F24 можно назначать отдельно."));
-        panel.Children.Add(Bullet("Лидер — удерживаемый аккорд из 2–3 модификаторов и короткая последовательность клавиш."));
-
-        panel.Children.Add(Section("3. Ограничьте контекст"));
-        panel.Children.Add(Paragraph(
-            "Контекст «*» работает везде. Значение acad ограничивает триггер окнами AutoCAD. Несколько значений разделяются запятыми; !browser исключает совпавшие окна."));
-
-        panel.Children.Add(Section("4. Используйте токены"));
+        panel.Children.Add(Section("Триггеры"));
         panel.Children.Add(Code(
-            "{date}  {time}  {datetime:yyyy-MM-dd}\n{clipboard}  {input:Подпись}  {choice:Да|Нет}\n{cursor}"));
+            "!mail      name@example.com\n" +
+            "!date      {date}\n" +
+            "Ctrl+Alt+M macro: AcadSave"));
+        panel.Children.Add(Note(
+            "Текст срабатывает после набора последовательности. Шорткат запускается прямым сочетанием. Лидер использует 2–3 модификатора и короткий остаток."));
 
-        panel.Children.Add(Section("5. Макросы"));
+        panel.Children.Add(Section("Контекст"));
+        panel.Children.Add(Code("*          везде\nacad       AutoCAD\n!browser   исключить браузеры"));
+        panel.Children.Add(Note("Несколько значений разделяются запятыми."));
+
+        panel.Children.Add(Section("Токены"));
         panel.Children.Add(Code(
-            "type текст\nkey Ctrl+S\nsleep 500\nclick 120,300\nrun \"C:\\Program Files\\Tool\\tool.exe\" --arg"));
-        panel.Children.Add(Paragraph(
-            "Пока выполняется одно действие, новый запуск отклоняется. При смене активного окна ввод автоматически прекращается, чтобы не попасть в другое приложение."));
+            "{date}  {time}  {datetime:yyyy-MM-dd}\n" +
+            "{clipboard}  {input:Подпись}  {choice:Да|Нет}  {cursor}"));
 
-        panel.Children.Add(Section("Диагностика"));
-        panel.Children.Add(Paragraph(
-            "Обычный лог не содержит введённый текст, значения триггеров, команды и содержимое буфера обмена. Подробное логирование включайте только временно через меню трея."));
+        panel.Children.Add(Section("Макросы"));
+        panel.Children.Add(Code(
+            "type текст\n" +
+            "key Ctrl+S\n" +
+            "sleep 500\n" +
+            "click 120,300\n" +
+            "run \"C:\\Program Files\\Tool\\tool.exe\" --arg"));
+
+        panel.Children.Add(Section("Безопасность"));
+        panel.Children.Add(Note(
+            "Одновременно выполняется только одно действие. При смене исходного окна ввод прекращается. Обычный журнал не сохраняет пользовательский текст, команды или буфер обмена."));
 
         return new ScrollViewer { Content = panel };
     }
 
-    private static TextBlock TitleText(string text) => new()
-    {
-        Text = text,
-        FontSize = 24,
-        FontWeight = FontWeight.SemiBold,
-        TextWrapping = TextWrapping.Wrap
-    };
-
     private static TextBlock Section(string text) => new()
     {
         Text = text,
-        FontSize = 17,
+        FontSize = 15,
         FontWeight = FontWeight.SemiBold,
-        Margin = new Thickness(0, 8, 0, 0),
-        TextWrapping = TextWrapping.Wrap
+        Margin = new Thickness(0, 5, 0, 0)
     };
 
-    private static TextBlock Paragraph(string text) => new()
+    private static TextBlock Note(string text) => new()
     {
         Text = text,
         TextWrapping = TextWrapping.Wrap,
-        LineHeight = 21
-    };
-
-    private static TextBlock Bullet(string text) => new()
-    {
-        Text = "• " + text,
-        TextWrapping = TextWrapping.Wrap,
-        Margin = new Thickness(8, 0, 0, 0)
+        Opacity = 0.72,
+        LineHeight = 20
     };
 
     private static Border Code(string text) => new()
     {
-        Padding = new Thickness(12),
-        CornerRadius = new CornerRadius(6),
-        Background = new SolidColorBrush(Color.FromArgb(60, 0, 0, 0)),
+        Padding = new Thickness(10, 8),
+        CornerRadius = new CornerRadius(4),
+        Background = new SolidColorBrush(Color.FromArgb(38, 0, 0, 0)),
         Child = new TextBlock
         {
             Text = text,
-            FontFamily = new FontFamily("Cascadia Mono,Consolas,monospace"),
+            FontFamily = MonoFont,
+            FontSize = 12,
             TextWrapping = TextWrapping.Wrap
         }
     };

@@ -7,19 +7,19 @@ using Avalonia.Threading;
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Small prompt used to resolve {input:…} and {choice:…} tokens during expansion.
+/// Small prompt used to resolve {input:...} and {choice:...} tokens during expansion.
 /// Calls are marshalled from the expansion worker onto Avalonia's UI thread.
-/// The prompt closes after 60 seconds without user activity or immediately when
-/// the running automation is cancelled.
 /// </summary>
 internal sealed class PromptWindow : Window
 {
     private const int TimeoutSeconds = 60;
+    private const int VisibleCountdownSeconds = 10;
 
     private readonly TaskCompletionSource<string> _result =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TextBox? _text;
     private readonly ComboBox? _combo;
+    private readonly TextBlock _timeoutText;
     private readonly DispatcherTimer _countdown;
     private readonly CancellationTokenRegistration _cancellationRegistration;
 
@@ -28,6 +28,7 @@ internal sealed class PromptWindow : Window
 
     private PromptWindow(string label, string[]? choices, CancellationToken cancellationToken)
     {
+        Title = "MacroEngine";
         Width = 380;
         SizeToContent = SizeToContent.Height;
         CanResize = false;
@@ -64,8 +65,22 @@ internal sealed class PromptWindow : Window
         input.PointerPressed += (_, _) => ResetCountdown();
         input.KeyDown += (_, _) => ResetCountdown();
 
-        var ok = new Button { Content = "OK", Width = 90, IsDefault = true };
-        var cancel = new Button { Content = "Отмена", Width = 90, IsCancel = true };
+        _timeoutText = new TextBlock
+        {
+            FontSize = 11,
+            Opacity = 0.55,
+            IsVisible = false,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var ok = new Button
+        {
+            Content = "Продолжить",
+            MinWidth = 96,
+            IsDefault = true,
+            Classes = { "accent" }
+        };
+        var cancel = new Button { Content = "Отмена", MinWidth = 88, IsCancel = true };
         ok.Click += (_, _) => Complete(CurrentValue());
         cancel.Click += (_, _) => CancelPrompt("Ввод отменён пользователем.");
 
@@ -77,11 +92,19 @@ internal sealed class PromptWindow : Window
             Children = { ok, cancel }
         };
 
+        var footer = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto")
+        };
+        footer.Children.Add(_timeoutText);
+        Grid.SetColumn(buttons, 1);
+        footer.Children.Add(buttons);
+
         Content = new StackPanel
         {
             Margin = new Thickness(16),
             Spacing = 12,
-            Children = { caption, input, buttons }
+            Children = { caption, input, footer }
         };
 
         _countdown = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -93,7 +116,7 @@ internal sealed class PromptWindow : Window
                 return;
             }
 
-            UpdateTitle();
+            UpdateTimeoutStatus();
         };
 
         _cancellationRegistration = cancellationToken.Register(() =>
@@ -116,10 +139,16 @@ internal sealed class PromptWindow : Window
     private void ResetCountdown()
     {
         _remaining = TimeoutSeconds;
-        UpdateTitle();
+        UpdateTimeoutStatus();
     }
 
-    private void UpdateTitle() => Title = $"MacroEngine ({_remaining}с)";
+    private void UpdateTimeoutStatus()
+    {
+        _timeoutText.IsVisible = _remaining <= VisibleCountdownSeconds;
+        _timeoutText.Text = _timeoutText.IsVisible
+            ? $"Закроется через {_remaining} с"
+            : "";
+    }
 
     private void Complete(string value)
     {

@@ -6,9 +6,8 @@ using Avalonia.Media;
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Modal editor for a trigger value. Text actions use a multiline editor;
-/// macro actions use a picker of named macros while preserving missing or
-/// legacy inline values instead of silently replacing them.
+/// Focused editor for a trigger value. Syntax help lives in the main settings/help UI,
+/// so this dialog contains only the value being edited and its actions.
 /// </summary>
 internal sealed class ValueEditorWindow : Window
 {
@@ -24,15 +23,14 @@ internal sealed class ValueEditorWindow : Window
 
         Title = $"Значение — {triggerName}";
         Width = 540;
-        Height = macroMode ? 210 : 380;
+        Height = macroMode ? 190 : 360;
         MinWidth = 400;
-        MinHeight = macroMode ? 210 : 260;
+        MinHeight = macroMode ? 190 : 250;
         CanResize = !macroMode;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
         Icon = AppIcon.Get();
 
-        TextBlock? macroWarning = null;
         Control body;
 
         if (macroMode)
@@ -63,31 +61,27 @@ internal sealed class ValueEditorWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
 
-            macroWarning = new TextBlock
+            var status = new TextBlock
             {
                 Text = missingCurrent
-                    ? "Текущее значение не найдено в библиотеке макросов. Оно сохранено в списке, чтобы не потерять конфигурацию."
+                    ? "Текущий макрос отсутствует в библиотеке; значение сохранено, чтобы не потерять конфигурацию."
                     : names.Count == 0
                         ? "Сначала создайте макрос на вкладке «Макросы»."
                         : "",
                 IsVisible = missingCurrent || names.Count == 0,
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 190, 100)),
+                Opacity = 0.65,
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 12
             };
 
             body = new StackPanel
             {
-                Spacing = 8,
+                Spacing = 6,
                 Children =
                 {
-                    new TextBlock
-                    {
-                        Text = "Макрос (вкладка «Макросы»):",
-                        Opacity = 0.7
-                    },
+                    new TextBlock { Text = "Макрос", Opacity = 0.6, FontSize = 12 },
                     _macroCombo,
-                    macroWarning
+                    status
                 }
             };
         }
@@ -105,23 +99,15 @@ internal sealed class ValueEditorWindow : Window
             body = _editor;
         }
 
-        var hint = new TextBlock
-        {
-            Text = "Токены: {date} {time} {clipboard} {cursor} {input:подпись} {choice:a|b|c}",
-            Opacity = 0.6,
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap,
-            IsVisible = !macroMode
-        };
-
         var btnOk = new Button
         {
-            Content = "OK",
-            Width = 90,
-            IsDefault = macroMode,
-            IsEnabled = !macroMode || _macroCombo!.SelectedIndex >= 0
+            Content = "Сохранить",
+            MinWidth = 92,
+            IsDefault = true,
+            IsEnabled = !macroMode || _macroCombo!.SelectedIndex >= 0,
+            Classes = { "accent" }
         };
-        var btnCancel = new Button { Content = "Отмена", Width = 90, IsCancel = true };
+        var btnCancel = new Button { Content = "Отмена", MinWidth = 88, IsCancel = true };
 
         if (_macroCombo != null)
             _macroCombo.SelectionChanged += (_, _) => btnOk.IsEnabled = _macroCombo.SelectedIndex >= 0;
@@ -139,11 +125,8 @@ internal sealed class ValueEditorWindow : Window
 
         var root = new DockPanel { Margin = new Thickness(14) };
         DockPanel.SetDock(buttons, Dock.Bottom);
-        DockPanel.SetDock(hint, Dock.Bottom);
         buttons.Margin = new Thickness(0, 10, 0, 0);
-        hint.Margin = new Thickness(0, 8, 0, 0);
         root.Children.Add(buttons);
-        root.Children.Add(hint);
         root.Children.Add(body);
         Content = root;
 
