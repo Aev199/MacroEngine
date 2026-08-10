@@ -17,135 +17,91 @@ internal sealed class AboutWindow : Window
     public AboutWindow(Action openHelp)
     {
         Title = "MacroEngine — О программе";
-        Width = 640;
-        Height = 470;
-        MinWidth = 540;
-        MinHeight = 380;
+        Width = 590;
+        Height = 420;
+        MinWidth = 520;
+        MinHeight = 350;
         CanResize = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Icon = AppIcon.Get();
 
         _status = new TextBlock
         {
-            Opacity = 0.6,
-            FontSize = 12,
+            Opacity = 0.56,
+            FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center
         };
 
-        var header = new StackPanel
+        var summary = new Grid
         {
-            Spacing = 3,
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = "MacroEngine",
-                    FontSize = 25,
-                    FontWeight = FontWeight.SemiBold
-                },
-                new TextBlock
-                {
-                    Text = ProductInfo.DisplayVersion,
-                    FontSize = 13,
-                    FontFamily = MonoFont,
-                    Opacity = 0.62
-                },
-                new TextBlock
-                {
-                    Text = "Локальная автоматизация Windows",
-                    Opacity = 0.72,
-                    Margin = new Thickness(0, 5, 0, 0)
-                }
-            }
+            ColumnDefinitions = new ColumnDefinitions("110,*"),
+            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto")
         };
+        AddRow(summary, 0, "Программа", "MacroEngine");
+        AddRow(summary, 1, "Версия", ProductInfo.DisplayVersion, mono: true);
+        AddRow(summary, 2, "Данные", AppPaths.IsPortable ? "Portable" : "LocalAppData");
+        AddRow(summary, 3, "Диагностика", AppLog.DiagnosticEnabled ? "включена" : "выключена");
 
-        var state = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("130,*"),
-            RowDefinitions = new RowDefinitions("Auto,Auto"),
-            Margin = new Thickness(0, 4, 0, 0)
-        };
-        state.Children.Add(Label("Данные"));
-        var dataValue = Value(AppPaths.IsPortable ? "Portable" : "LocalAppData");
-        Grid.SetColumn(dataValue, 1);
-        state.Children.Add(dataValue);
-
-        var diagLabel = Label("Диагностика");
-        Grid.SetRow(diagLabel, 1);
-        state.Children.Add(diagLabel);
-        var diagValue = Value(AppLog.DiagnosticEnabled ? "включена" : "выключена");
-        Grid.SetRow(diagValue, 1);
-        Grid.SetColumn(diagValue, 1);
-        state.Children.Add(diagValue);
-
-        var openData = new Button { Content = "Папка данных" };
         var help = new Button { Content = "Справка", Classes = { "accent" } };
+        var openData = new Button { Content = "Папка данных" };
         var copyDiagnostics = new Button { Content = "Копировать диагностику" };
+
+        help.Click += (_, _) => openHelp();
         openData.Click += (_, _) => Run(
             () => ShellTools.OpenDirectory(AppPaths.RootDirectory),
             "Папка данных открыта.");
-        help.Click += (_, _) => openHelp();
         copyDiagnostics.Click += (_, _) => Run(() =>
         {
             System.Windows.Forms.Clipboard.SetText(ProductInfo.BuildDiagnosticSummary());
         }, "Диагностика скопирована без пользовательских данных.");
 
-        var mainActions = new StackPanel
+        var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            Spacing = 6,
             Children = { help, openData, copyDiagnostics }
         };
 
         var details = BuildTechnicalDetails();
         details.IsVisible = false;
-
         var detailsButton = new Button
         {
-            Content = "Техническая информация",
+            Content = "Техническая информация...",
             HorizontalAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(8, 4)
+            Padding = new Thickness(7, 3)
         };
         detailsButton.Click += (_, _) =>
         {
             details.IsVisible = !details.IsVisible;
             detailsButton.Content = details.IsVisible
                 ? "Скрыть техническую информацию"
-                : "Техническая информация";
+                : "Техническая информация...";
         };
 
         var content = new StackPanel
         {
-            Margin = new Thickness(20),
-            Spacing = 14,
-            Children =
-            {
-                header,
-                state,
-                mainActions,
-                detailsButton,
-                details
-            }
+            Margin = new Thickness(16),
+            Spacing = 11,
+            Children = { summary, actions, detailsButton, details }
         };
 
-        var close = new Button { Content = "Закрыть", MinWidth = 88, IsCancel = true };
+        var close = new Button { Content = "Закрыть", MinWidth = 84, IsCancel = true };
         close.Click += (_, _) => Close();
 
         var footer = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(20, 0, 20, 16)
+            Margin = new Thickness(16, 0, 16, 12)
         };
         footer.Children.Add(_status);
         Grid.SetColumn(close, 1);
         footer.Children.Add(close);
 
-        var scroll = new ScrollViewer { Content = content };
         Content = new Grid
         {
             RowDefinitions = new RowDefinitions("*,Auto"),
-            Children = { scroll, footer }
+            Children = { new ScrollViewer { Content = content }, footer }
         };
         Grid.SetRow(footer, 1);
     }
@@ -170,16 +126,16 @@ internal sealed class AboutWindow : Window
             () => ShellTools.OpenUrl(ProductInfo.RepositoryUrl),
             "Репозиторий открыт в браузере.");
 
-        var actions = new StackPanel
+        var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            Spacing = 6,
             Children = { openConfig, openLogs, openLog, github }
         };
 
         return new StackPanel
         {
-            Spacing = 7,
+            Spacing = 6,
             Children =
             {
                 PathRow("Программа", AppPaths.ApplicationDirectory),
@@ -187,42 +143,54 @@ internal sealed class AboutWindow : Window
                 PathRow("Триггеры", AppPaths.TriggersFile),
                 PathRow("Макросы", AppPaths.MacrosFile),
                 PathRow("Журнал", AppPaths.LogFile),
-                actions,
+                buttons,
                 new TextBlock
                 {
                     Text = AppLog.DiagnosticEnabled
                         ? "Диагностический журнал может содержать сведения о клавишах, раскладке и активных окнах."
                         : "Обычный журнал не содержит текст подстановок, команды, макросы и содержимое буфера обмена.",
                     TextWrapping = TextWrapping.Wrap,
-                    Opacity = 0.58,
+                    Opacity = 0.54,
                     FontSize = 11,
-                    Margin = new Thickness(0, 3, 0, 0)
+                    Margin = new Thickness(0, 2, 0, 0)
                 }
             }
         };
     }
 
-    private static TextBlock Label(string text) => new()
+    private static void AddRow(Grid grid, int row, string label, string value, bool mono = false)
     {
-        Text = text,
-        Opacity = 0.56,
-        Margin = new Thickness(0, 3)
-    };
+        var labelBlock = new TextBlock
+        {
+            Text = label,
+            Opacity = 0.54,
+            Margin = new Thickness(0, 3),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetRow(labelBlock, row);
+        grid.Children.Add(labelBlock);
 
-    private static TextBlock Value(string text) => new()
-    {
-        Text = text,
-        Margin = new Thickness(0, 3)
-    };
+        var valueBlock = new TextBlock
+        {
+            Text = value,
+            Margin = new Thickness(0, 3),
+            VerticalAlignment = VerticalAlignment.Center,
+            FontFamily = mono ? MonoFont : FontFamily.Default
+        };
+        Grid.SetRow(valueBlock, row);
+        Grid.SetColumn(valueBlock, 1);
+        grid.Children.Add(valueBlock);
+    }
 
     private static Control PathRow(string label, string value)
     {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("90,*") };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("82,*") };
         grid.Children.Add(new TextBlock
         {
             Text = label,
-            Opacity = 0.52,
-            VerticalAlignment = VerticalAlignment.Center
+            Opacity = 0.5,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 11
         });
 
         var path = new TextBox
@@ -231,7 +199,7 @@ internal sealed class AboutWindow : Window
             IsReadOnly = true,
             FontFamily = MonoFont,
             FontSize = 11,
-            Padding = new Thickness(6, 4)
+            Padding = new Thickness(5, 3)
         };
         Grid.SetColumn(path, 1);
         grid.Children.Add(path);

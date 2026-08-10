@@ -15,10 +15,10 @@ internal sealed class HelpWindow : Window
     public HelpWindow(Action openAbout)
     {
         Title = $"MacroEngine {ProductInfo.DisplayVersion} — Справка";
-        Width = 800;
-        Height = 620;
-        MinWidth = 620;
-        MinHeight = 460;
+        Width = 780;
+        Height = 590;
+        MinWidth = 600;
+        MinHeight = 440;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Icon = AppIcon.Get();
 
@@ -36,11 +36,10 @@ internal sealed class HelpWindow : Window
         var close = new Button { Content = "Закрыть", IsCancel = true };
         var status = new TextBlock
         {
-            Opacity = 0.58,
-            FontSize = 12,
+            Opacity = 0.54,
+            FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
-            TextWrapping = TextWrapping.Wrap,
-            Text = "Настройки: левый клик по значку MacroEngine в трее."
+            TextWrapping = TextWrapping.Wrap
         };
 
         about.Click += (_, _) => openAbout();
@@ -53,14 +52,14 @@ internal sealed class HelpWindow : Window
         var footer = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(12, 8, 12, 12)
+            Margin = new Thickness(10, 7, 10, 10)
         };
         footer.Children.Add(status);
 
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            Spacing = 6,
             HorizontalAlignment = HorizontalAlignment.Right,
             Children = { data, about, close }
         };
@@ -75,59 +74,44 @@ internal sealed class HelpWindow : Window
         Grid.SetRow(footer, 1);
     }
 
-    private static Control BuildReadme()
+    private static Control BuildReadme() => new TextBox
     {
-        var readme = new TextBox
-        {
-            Text = ProductInfo.ReadEmbeddedReadme(),
-            IsReadOnly = true,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(10),
-            Padding = new Thickness(10)
-        };
-
-        return readme;
-    }
+        Text = ProductInfo.ReadEmbeddedReadme(),
+        IsReadOnly = true,
+        AcceptsReturn = true,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(8),
+        Padding = new Thickness(8)
+    };
 
     private static Control BuildQuickReference()
     {
         var panel = new StackPanel
         {
-            Margin = new Thickness(20),
-            Spacing = 14
+            Margin = new Thickness(18, 14),
+            Spacing = 10
         };
-
-        panel.Children.Add(new TextBlock
-        {
-            Text = "MacroEngine",
-            FontSize = 23,
-            FontWeight = FontWeight.SemiBold
-        });
-        panel.Children.Add(new TextBlock
-        {
-            Text = "Текстовые триггеры, сочетания клавиш и последовательные макросы.",
-            Opacity = 0.68,
-            TextWrapping = TextWrapping.Wrap
-        });
 
         panel.Children.Add(Section("Триггеры"));
         panel.Children.Add(Code(
-            "!mail      name@example.com\n" +
-            "!date      {date}\n" +
-            "Ctrl+Alt+M macro: AcadSave"));
+            "!mail        name@example.com\n" +
+            "!date        {date}\n" +
+            "Ctrl+Alt+M   macro: AcadSave"));
         panel.Children.Add(Note(
-            "Текст срабатывает после набора последовательности. Шорткат запускается прямым сочетанием. Лидер использует 2–3 модификатора и короткий остаток."));
+            "Текст — последовательность символов. Шорткат — прямое сочетание. Лидер — 2–3 модификатора и короткий остаток."));
 
+        panel.Children.Add(Divider());
         panel.Children.Add(Section("Контекст"));
-        panel.Children.Add(Code("*          везде\nacad       AutoCAD\n!browser   исключить браузеры"));
+        panel.Children.Add(Code("*            везде\nacad         AutoCAD\n!browser     исключить браузеры"));
         panel.Children.Add(Note("Несколько значений разделяются запятыми."));
 
+        panel.Children.Add(Divider());
         panel.Children.Add(Section("Токены"));
         panel.Children.Add(Code(
             "{date}  {time}  {datetime:yyyy-MM-dd}\n" +
             "{clipboard}  {input:Подпись}  {choice:Да|Нет}  {cursor}"));
 
+        panel.Children.Add(Divider());
         panel.Children.Add(Section("Макросы"));
         panel.Children.Add(Code(
             "type текст\n" +
@@ -136,9 +120,10 @@ internal sealed class HelpWindow : Window
             "click 120,300\n" +
             "run \"C:\\Program Files\\Tool\\tool.exe\" --arg"));
 
+        panel.Children.Add(Divider());
         panel.Children.Add(Section("Безопасность"));
         panel.Children.Add(Note(
-            "Одновременно выполняется только одно действие. При смене исходного окна ввод прекращается. Обычный журнал не сохраняет пользовательский текст, команды или буфер обмена."));
+            "Одновременно выполняется одно действие. При смене исходного окна ввод прекращается. Обычный журнал не сохраняет текст подстановок, команды или буфер обмена."));
 
         return new ScrollViewer { Content = panel };
     }
@@ -146,31 +131,32 @@ internal sealed class HelpWindow : Window
     private static TextBlock Section(string text) => new()
     {
         Text = text,
-        FontSize = 15,
-        FontWeight = FontWeight.SemiBold,
-        Margin = new Thickness(0, 5, 0, 0)
+        FontSize = 13,
+        FontWeight = FontWeight.Medium
     };
 
     private static TextBlock Note(string text) => new()
     {
         Text = text,
         TextWrapping = TextWrapping.Wrap,
-        Opacity = 0.72,
-        LineHeight = 20
+        Opacity = 0.68,
+        LineHeight = 19
     };
 
-    private static Border Code(string text) => new()
+    private static TextBlock Code(string text) => new()
     {
-        Padding = new Thickness(10, 8),
-        CornerRadius = new CornerRadius(4),
-        Background = new SolidColorBrush(Color.FromArgb(38, 0, 0, 0)),
-        Child = new TextBlock
-        {
-            Text = text,
-            FontFamily = MonoFont,
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap
-        }
+        Text = text,
+        FontFamily = MonoFont,
+        FontSize = 12,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(8, 0, 0, 0)
+    };
+
+    private static Border Divider() => new()
+    {
+        Height = 1,
+        Background = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+        Margin = new Thickness(0, 2)
     };
 
     private static void Run(TextBlock status, Action action, string success)

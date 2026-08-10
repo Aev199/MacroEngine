@@ -1,15 +1,14 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml.Styling;
-using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
 
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Avalonia application shell. MacroEngine deliberately stays close to native
-/// Fluent controls, with a restrained accent reserved for primary actions and selection.
+/// Avalonia application shell. MacroEngine intentionally follows the native
+/// Windows/Fluent visual language and leaves accent selection to the system theme.
 /// </summary>
 internal sealed class App : Application
 {
@@ -25,15 +24,6 @@ internal sealed class App : Application
         });
 
         RequestedThemeVariant = ThemeVariant.Dark;
-
-        // Muted teal: enough to identify the product without making every control decorative.
-        Resources["SystemAccentColor"] = Color.Parse("#52B8A2");
-        Resources["SystemAccentColorDark1"] = Color.Parse("#459E8B");
-        Resources["SystemAccentColorDark2"] = Color.Parse("#398373");
-        Resources["SystemAccentColorDark3"] = Color.Parse("#2E685C");
-        Resources["SystemAccentColorLight1"] = Color.Parse("#70C6B4");
-        Resources["SystemAccentColorLight2"] = Color.Parse("#8DD3C4");
-        Resources["SystemAccentColorLight3"] = Color.Parse("#AADFD4");
     }
 
     public override void OnFrameworkInitializationCompleted()
