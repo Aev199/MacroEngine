@@ -4,10 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
-using Avalonia.Data;
-using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -68,8 +65,9 @@ internal sealed class TriggerRow : INotifyPropertyChanged
         get => _value;
         set
         {
-            if (Set(ref _value, value))
-                Notify(nameof(ValuePreview));
+            if (!Set(ref _value, value)) return;
+            Notify(nameof(ValuePreview));
+            Notify(nameof(ActionSummary));
         }
     }
 
@@ -82,7 +80,11 @@ internal sealed class TriggerRow : INotifyPropertyChanged
     public string Action
     {
         get => _action;
-        set => Set(ref _action, value);
+        set
+        {
+            if (Set(ref _action, value))
+                Notify(nameof(ActionSummary));
+        }
     }
 
     public bool TriggerEditable => Type != "Шорткат";
@@ -106,9 +108,66 @@ internal sealed class TriggerRow : INotifyPropertyChanged
         get
         {
             if (Value.Length == 0) return "Пусто";
-            string oneLine = Value.Replace("\r", "").Replace("\n", " / ");
+            string oneLine = FlattenValue(Value);
             return oneLine.Length > 54 ? oneLine[..54] + "..." : oneLine;
         }
+    }
+
+    /// <summary>
+    /// One-line explanation shown directly in the trigger list. It tells the user
+    /// what the rule will do without requiring selection or knowledge of internal
+    /// action identifiers such as "text", "macro" or "launch".
+    /// </summary>
+    public string ActionSummary
+    {
+        get
+        {
+            string label = Action.Trim().ToLowerInvariant() switch
+            {
+                "text" => "Вставить текст",
+                "richtext" => "Вставить форматированный текст",
+                "script" => "Скрипт",
+                "lisp" => "LISP",
+                "macro" => "Макрос",
+                "open" => "Открыть",
+                "launch" => "Запустить",
+                { Length: > 0 } unknown => unknown,
+                _ => "Действие"
+            };
+
+            string preview = FlattenValue(Value);
+            if (preview.Length == 0)
+                return label + " · пусто";
+
+            const int maxPreviewLength = 64;
+            if (preview.Length > maxPreviewLength)
+                preview = preview[..maxPreviewLength].TrimEnd() + "...";
+
+            return $"{label} · {preview}";
+        }
+    }
+
+    private static string FlattenValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "";
+
+        var sb = new StringBuilder(value.Length);
+        bool previousWhitespace = false;
+        foreach (char ch in value)
+        {
+            bool whitespace = char.IsWhiteSpace(ch);
+            if (whitespace)
+            {
+                if (!previousWhitespace)
+                    sb.Append(' ');
+            }
+            else
+            {
+                sb.Append(ch);
+            }
+            previousWhitespace = whitespace;
+        }
+        return sb.ToString().Trim();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -192,9 +251,9 @@ internal static class SettingsStateFingerprint
 }
 
 /// <summary>
-/// Compact settings UI: rules are selected from a list and edited in a property
-/// inspector. The interface deliberately favors density and native controls over
-/// cards, chips and persistent explanatory copy.
+/// Compact settings UI: rules are selected from a semantic list and edited in a
+/// property inspector. Each list row shows both activation and result, so the
+/// overview remains useful without becoming a dense editable table.
 /// </summary>
 internal sealed class SettingsWindow : Window
 {
@@ -251,10 +310,10 @@ internal sealed class SettingsWindow : Window
         _macroDefs = macros.Load();
 
         Title = "MacroEngine — Настройки";
-        Width = 900;
-        Height = 540;
-        MinWidth = 720;
-        MinHeight = 430;
+        Width = 920;
+        Height = 560;
+        MinWidth = 740;
+        MinHeight = 440;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Icon = AppIcon.Get();
 
@@ -397,45 +456,49 @@ internal sealed class SettingsWindow : Window
         {
             var trigger = new TextBlock
             {
-                VerticalAlignment = VerticalAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                FontWeight = FontWeight.Medium
+                FontWeight = FontWeight.Medium,
+                FontSize = 13
             };
             trigger.Bind(TextBlock.TextProperty,
-                new Binding(nameof(TriggerRow.DisplayTrigger)));
+                new Avalonia.Data.Binding(nameof(TriggerRow.DisplayTrigger)));
 
-            var action = new TextBlock
+            var summary = new TextBlock
             {
-                VerticalAlignment = VerticalAlignment.Center,
-                Opacity = 0.7,
+                Opacity = 0.68,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                FontFamily = MonoFont,
-                FontSize = 11
+                FontSize = 11,
+                Margin = new Thickness(0, 1, 0, 0)
             };
-            action.Bind(TextBlock.TextProperty,
-                new Binding(nameof(TriggerRow.Action)));
+            summary.Bind(TextBlock.TextProperty,
+                new Avalonia.Data.Binding(nameof(TriggerRow.ActionSummary)));
+
+            var meaning = new StackPanel
+            {
+                Spacing = 0,
+                Children = { trigger, summary }
+            };
 
             var context = new TextBlock
             {
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Opacity = 0.52,
+                Opacity = 0.5,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 FontFamily = MonoFont,
-                FontSize = 11
+                FontSize = 11,
+                Margin = new Thickness(12, 0, 0, 0)
             };
             context.Bind(TextBlock.TextProperty,
-                new Binding(nameof(TriggerRow.Context)));
+                new Avalonia.Data.Binding(nameof(TriggerRow.Context)));
 
             var grid = new Grid
             {
-                ColumnDefinitions = new ColumnDefinitions("2*,1.15*,1*"),
-                Margin = new Thickness(3, 2)
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                Margin = new Thickness(4, 4, 5, 4)
             };
-            grid.Children.Add(trigger);
-            Grid.SetColumn(action, 1);
-            grid.Children.Add(action);
-            Grid.SetColumn(context, 2);
+            grid.Children.Add(meaning);
+            Grid.SetColumn(context, 1);
             grid.Children.Add(context);
             return grid;
         });
@@ -516,15 +579,12 @@ internal sealed class SettingsWindow : Window
 
         var header = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("2*,1.15*,1*"),
-            Margin = new Thickness(8, 0, 8, 5)
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Margin = new Thickness(9, 0, 9, 5)
         };
-        header.Children.Add(ColumnHeader("Триггер"));
-        var actionHeader = ColumnHeader("Действие");
-        Grid.SetColumn(actionHeader, 1);
-        header.Children.Add(actionHeader);
+        header.Children.Add(ColumnHeader("Триггер / что делает"));
         var contextHeader = ColumnHeader("Контекст", HorizontalAlignment.Right);
-        Grid.SetColumn(contextHeader, 2);
+        Grid.SetColumn(contextHeader, 1);
         header.Children.Add(contextHeader);
 
         var leftContent = new Grid
@@ -544,7 +604,7 @@ internal sealed class SettingsWindow : Window
 
         var body = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("5*,4*"),
+            ColumnDefinitions = new ColumnDefinitions("3*,2*"),
             Children = { left, _inspector }
         };
         Grid.SetColumn(_inspector, 1);
