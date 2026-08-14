@@ -21,5 +21,5 @@ internal static class SystemHotkeys
 
     /// <summary>True if <paramref name="combo"/> (e.g. "Ctrl+Alt+Delete") is a reserved system hotkey.</summary>
     public static bool IsSystem(string combo) =>
-        !string.IsNullOrEmpty(combo) && _set.Contains(combo.Replace(" ", ""));
+        !string.IsNullOrEmpty(combo) && _set.Contains(HotkeyRules.Normalize(combo));
 }

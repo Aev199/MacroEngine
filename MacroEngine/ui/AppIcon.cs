@@ -1,45 +1,54 @@
-using System.Drawing;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Loads the application tray icon from icon.png.
+/// Loads the application icon from icon.png next to the executable,
+/// or renders a simple fallback (dark circle + teal glyph) if missing.
 /// </summary>
 internal static class AppIcon
 {
-    private static Icon? _cached;
+    private static WindowIcon? _cached;
 
-    public static Icon Get()
+    public static WindowIcon Get()
     {
         if (_cached != null) return _cached;
 
         string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.png");
-        if (File.Exists(path))
-        {
-            using var bmp = new Bitmap(path);
-            _cached = Icon.FromHandle(bmp.GetHicon());
-        }
-        else
-        {
-            _cached = GenerateFallbackIcon();
-        }
-
+        _cached = File.Exists(path)
+            ? new WindowIcon(path)
+            : new WindowIcon(RenderFallback());
         return _cached;
     }
 
-    private static Icon GenerateFallbackIcon()
+    private static Bitmap RenderFallback()
     {
-        using var bmp = new Bitmap(32, 32);
-        using var g = Graphics.FromImage(bmp);
-        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        using var bgBrush = new SolidBrush(Color.FromArgb(45, 45, 48));
-        g.FillEllipse(bgBrush, 1, 1, 30, 30);
-        using var ringPen = new Pen(Color.FromArgb(0, 180, 140), 2f);
-        g.DrawEllipse(ringPen, 1, 1, 30, 30);
-        using var font = new Font("Segoe UI", 14, FontStyle.Bold);
-        using var textBrush = new SolidBrush(Color.FromArgb(0, 210, 160));
-        var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString("▸", font, textBrush, new RectangleF(0, -1, 32, 32), sf);
-        return Icon.FromHandle(bmp.GetHicon());
+        var rtb = new RenderTargetBitmap(new PixelSize(32, 32), new Vector(96, 96));
+        using (var ctx = rtb.CreateDrawingContext())
+        {
+            var bg = new SolidColorBrush(Color.FromRgb(45, 45, 48));
+            var ring = new Pen(new SolidColorBrush(Color.FromRgb(0, 180, 140)), 2);
+            ctx.DrawEllipse(bg, ring, new Point(16, 16), 14, 14);
+
+            var accent = new SolidColorBrush(Color.FromRgb(0, 210, 160));
+            var segments = new PathSegments
+            {
+                new LineSegment { Point = new Point(23, 16) },
+                new LineSegment { Point = new Point(12, 23) }
+            };
+            var figure = new PathFigure
+            {
+                StartPoint = new Point(12, 9),
+                IsClosed = true,
+                Segments = segments
+            };
+            var arrow = new PathGeometry { Figures = new PathFigures { figure } };
+            ctx.DrawGeometry(accent, null, arrow);
+        }
+        return rtb;
     }
 }

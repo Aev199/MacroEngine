@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore
+        run: dotnet restore MacroEngine.Tests/MacroEngine.Tests.csproj
+
+      - name: Test
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/test-results | Out-Null
+          dotnet test MacroEngine.Tests/MacroEngine.Tests.csproj -c Release --no-restore `
+            --logger "trx;LogFileName=test-results.trx" `
+            --results-directory artifacts/test-results 2>&1 `
+            | Tee-Object -FilePath artifacts/test-results/console.txt
+          $exitCode = $LASTEXITCODE
+          exit $exitCode
+
+      - name: Upload test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacroEngine-test-diagnostics
+          path: artifacts/test-results/
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Build
+        run: dotnet build MacroEngine/MacroEngine.csproj -c Release --no-restore
+
+      - name: Publish win-x64
+        run: >-
+          dotnet publish MacroEngine/MacroEngine.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -o artifacts/win-x64
+
+      - name: Read product version
+        id: product
+        shell: pwsh
+        run: |
+          $project = Get-Content MacroEngine/MacroEngine.csproj -Raw
+          $match = [regex]::Match($project, '<Version>([^<]+)</Version>')
+          if (-not $match.Success) {
+            throw 'Version was not found in MacroEngine.csproj.'
+          }
+          "version=$($match.Groups[1].Value)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload ready Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacroEngine-${{ steps.product.outputs.version }}-win-x64
+          path: artifacts/win-x64/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
