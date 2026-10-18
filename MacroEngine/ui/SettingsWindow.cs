@@ -39,7 +39,6 @@ internal sealed class TriggerRow : INotifyPropertyChanged
             Notify(nameof(HotkeyEditable));
             Notify(nameof(HotkeyDisplay));
             Notify(nameof(DisplayTrigger));
-            Notify(nameof(KindTag));
         }
     }
 
@@ -83,6 +82,7 @@ internal sealed class TriggerRow : INotifyPropertyChanged
         {
             if (!Set(ref _context, value)) return;
             Notify(nameof(WhereText));
+            Notify(nameof(ListWhere));
             Notify(nameof(WhereBrush));
         }
     }
@@ -199,6 +199,7 @@ internal sealed class TriggerRow : INotifyPropertyChanged
             if (_restricted == value) return;
             _restricted = value;
             Notify(nameof(WhereText));
+            Notify(nameof(ListWhere));
             Notify(nameof(WhereBrush));
         }
     }
@@ -216,15 +217,23 @@ internal sealed class TriggerRow : INotifyPropertyChanged
         Notify(nameof(StatusBrush));
     }
 
-    public string KindTag => Type switch { "Шорткат" => "сочетание", "Лидер" => "аккорд", _ => "текст" };
-
-    public string Subtitle => _problemTone == Tone.Error && _problem != null ? _problem : ActionSummary;
+    /// <summary>
+    /// List line under the trigger: plain text is shown as is (it is the common case,
+    /// so "Вставить текст ·" on every row would be noise); other actions keep their label.
+    /// </summary>
+    public string Subtitle => _problemTone == Tone.Error && _problem != null ? _problem
+        : Action.Trim().Equals("text", StringComparison.OrdinalIgnoreCase) && Value.Trim().Length > 0
+            ? FlattenValue(Value)
+            : ActionSummary;
 
     public IBrush SubtitleBrush => UiTheme.B(_problemTone == Tone.Error ? UiTheme.Error : UiTheme.TextGrey);
 
     public IBrush StatusBrush => _problem == null ? Brushes.Transparent : UiTheme.B(UiTheme.ToneColor(_problemTone));
 
     public string WhereText => ContextSpec.Describe(Context, Restricted);
+
+    /// <summary>Scope for the list: empty for the default «везде».</summary>
+    public string ListWhere => Restricted ? WhereText : WhereText == "везде" ? "" : WhereText;
 
     public IBrush WhereBrush => UiTheme.B(Restricted ? UiTheme.Accent : UiTheme.TextGrey);
 
@@ -389,7 +398,6 @@ internal sealed class SettingsWindow : Window
     private bool _loading;
 
     // ── Shell ───────────────────────────────────────────────────────
-    private readonly TextBlock _subtitle = new() { FontSize = UiTheme.FsCaption, Foreground = UiTheme.B(UiTheme.TextMuted) };
     private readonly Border _unsaved;
     private readonly Button _btnSave = UiTheme.Btn("Сохранить", "primary");
     private readonly Button _btnRevert = UiTheme.Btn("Отменить изменения", "ghost");
@@ -410,21 +418,19 @@ internal sealed class SettingsWindow : Window
     private readonly ScrollViewer _card = new();
     private readonly Control _cardEmpty;
     private readonly TextBlock _cardTitle = new() { FontSize = UiTheme.FsTitle, FontWeight = FontWeight.Bold, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock _cardSubtitle = new() { FontSize = UiTheme.FsLabel, Foreground = UiTheme.B(UiTheme.TextMuted), Margin = new Thickness(0, 2, 0, 0) };
     private readonly Note _issues = new();
 
     private readonly ToggleButton[] _when = { UiTheme.Seg("Набираю текст"), UiTheme.Seg("Нажимаю сочетание"), UiTheme.Seg("Аккорд + буквы") };
     private readonly StackPanel _whenText = new();
     private readonly StackPanel _whenHotkey = new();
     private readonly Grid _whenLeader = new() { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
-    private readonly TextBox _trigText = new() { FontFamily = UiTheme.Mono, Watermark = "например  !tel  или  @@" };
-    private readonly Button _hotkeyBtn = UiTheme.Btn("");
-    private readonly Button _chordBtn = UiTheme.Btn("");
-    private readonly TextBox _leaderRest = new() { FontFamily = UiTheme.Mono, Watermark = "например  gm" };
+    private readonly TextBox _trigText = new() { FontFamily = UiTheme.Mono, Watermark = "!tel" };
+    private readonly Button _hotkeyBtn = new() { FontFamily = UiTheme.Mono, MinWidth = 180, HorizontalContentAlignment = HorizontalAlignment.Left };
+    private readonly Button _chordBtn = new() { FontFamily = UiTheme.Mono, MinWidth = 160, HorizontalContentAlignment = HorizontalAlignment.Left };
+    private readonly TextBox _leaderRest = new() { FontFamily = UiTheme.Mono, Watermark = "gm" };
     private readonly Note _whenNote = new();
 
     private readonly ComboBox _action = new() { MinWidth = 320 };
-    private readonly Note _actionNote = new();
 
     private readonly TextBlock _valueLabel = UiTheme.FieldLabel("");
     private readonly TextBox _valueText = new()
@@ -445,8 +451,9 @@ internal sealed class SettingsWindow : Window
     private readonly StackPanel _includeBlock = new();
     private readonly WrapPanel _includeChips = new();
     private readonly WrapPanel _excludeChips = new();
+    private readonly StackPanel _excludeBlock = new();
     private readonly Grid _manualEntry = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), IsVisible = false, Margin = new Thickness(0, 0, 0, 6) };
-    private readonly TextBox _manualText = new() { Watermark = "имя процесса или часть заголовка окна (acad, revit, chrome)" };
+    private readonly TextBox _manualText = new() { Watermark = "процесс или часть заголовка окна: acad, revit, chrome" };
     private bool _manualExclude;
 
     // ── Macros tab ──────────────────────────────────────────────────
@@ -457,7 +464,8 @@ internal sealed class SettingsWindow : Window
     private readonly TextBox _macroSteps = new()
     {
         AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.NoWrap,
-        FontFamily = UiTheme.Mono, VerticalContentAlignment = VerticalAlignment.Top
+        FontFamily = UiTheme.Mono, VerticalContentAlignment = VerticalAlignment.Top,
+        Watermark = "Один шаг на строку, например:\ntype Привет\nkey Enter\nsleep 200"
     };
     private readonly Note _macroUsage = new();
     private readonly Note _macroIssues = new();
@@ -486,7 +494,7 @@ internal sealed class SettingsWindow : Window
             Padding = new Thickness(8, 2, 4, 2),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0),
-            Child = new TextBlock { Text = "Есть несохранённые изменения", FontSize = UiTheme.FsLabel, Foreground = UiTheme.B(UiTheme.TextMuted) }
+            Child = new TextBlock { Text = "Не сохранено", FontSize = UiTheme.FsLabel, Foreground = UiTheme.B(UiTheme.TextMuted) }
         };
         _btnSave.Click += async (_, _) => await SaveAllAsync();
         _btnRevert.Click += async (_, _) => await RevertAsync();
@@ -498,26 +506,31 @@ internal sealed class SettingsWindow : Window
         _tabTriggers.Click += (_, _) => SelectTab(0);
         _tabMacros.Click += (_, _) => SelectTab(1);
 
-        var appbar = new Border
+        // One strip: tabs on the left, save state and actions on the right.
+        // The window title already says what this is; no in-window brand header.
+        var actions = new StackPanel
         {
-            Background = UiTheme.B(UiTheme.PanelBg),
-            Padding = new Thickness(14, 8, 12, 0),
-            Child = BuildAppBar()
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { _unsaved, _btnRevert, _btnSave }
         };
+        var strip = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        strip.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { _tabTriggers, _tabMacros } });
+        Grid.SetColumn(actions, 1);
+        strip.Children.Add(actions);
         var tabs = new Border
         {
             Background = UiTheme.B(UiTheme.PanelBg),
             BorderBrush = UiTheme.B(UiTheme.Border),
             BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(6, 0),
-            Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { _tabTriggers, _tabMacros } }
+            Padding = new Thickness(6, 4, 10, 0),
+            Child = strip
         };
 
         var pages = new Grid { Margin = new Thickness(10, 8, 10, 10), Children = { _pageTriggers, _pageMacros } };
         var shell = new DockPanel();
-        DockPanel.SetDock(appbar, Dock.Top);
         DockPanel.SetDock(tabs, Dock.Top);
-        shell.Children.Add(appbar);
         shell.Children.Add(tabs);
         shell.Children.Add(pages);
 
@@ -528,27 +541,6 @@ internal sealed class SettingsWindow : Window
 
         LoadFromDisk();
         SelectTab(0);
-    }
-
-    private Control BuildAppBar()
-    {
-        var titles = new StackPanel
-        {
-            Margin = new Thickness(0, 0, 0, 8),
-            Children = { new TextBlock { Text = "MacroEngine", FontSize = UiTheme.FsPanel, FontWeight = FontWeight.Bold }, _subtitle }
-        };
-        var actions = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            VerticalAlignment = VerticalAlignment.Top,
-            Children = { _unsaved, _btnRevert, _btnSave }
-        };
-        var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        bar.Children.Add(titles);
-        Grid.SetColumn(actions, 1);
-        bar.Children.Add(actions);
-        return bar;
     }
 
     private void SelectTab(int index)
@@ -623,9 +615,8 @@ internal sealed class SettingsWindow : Window
         _unsaved.IsVisible = _dirty;
         _btnRevert.IsVisible = _dirty;
         _btnSave.IsEnabled = _dirty;
-        _subtitle.Text = $"{Plural(_rows.Count, "триггер", "триггера", "триггеров")} · {Plural(_macroDefs.Count, "макрос", "макроса", "макросов")}";
-        _tabTriggers.Label = $"Триггеры  {_rows.Count}";
-        _tabMacros.Label = $"Макросы  {_macroDefs.Count}";
+        _tabTriggers.Set("Триггеры", _rows.Count);
+        _tabMacros.Set("Макросы", _macroDefs.Count);
     }
 
     private async Task RevertAsync()
@@ -675,11 +666,10 @@ internal sealed class SettingsWindow : Window
         RefreshDirty();
         RebuildFilter();
         int conflicts = _rows.Count(r => r.ProblemTone == Tone.Warning);
-        string msg = $"Сохранено: {Plural(_rows.Count, "триггер", "триггера", "триггеров")}, {Plural(_macroDefs.Count, "макрос", "макроса", "макросов")}";
         if (conflicts > 0)
-            _snack.Show(msg + $" · возможных конфликтов: {conflicts} (отмечены оранжевым)", Tone.Warning);
+            _snack.Show($"Сохранено. Конфликтов: {conflicts} — отмечены в списке", Tone.Warning);
         else
-            _snack.Show(msg, Tone.Success);
+            _snack.Show("Сохранено", Tone.Success);
         return true;
     }
 
@@ -709,8 +699,8 @@ internal sealed class SettingsWindow : Window
                 _         => a.Trigger.Trim().Length > 0 && a.Trigger.Trim() == b.Trigger.Trim()
             };
             if (!same) continue;
-            problems.TryAdd(a, ($"«{a.DisplayTrigger}» уже используется в другом триггере ({b.WhereText}) — сработает только один", Tone.Warning));
-            problems.TryAdd(b, ($"«{b.DisplayTrigger}» уже используется в другом триггере ({a.WhereText}) — сработает только один", Tone.Warning));
+            problems.TryAdd(a, ("такой же триггер уже есть — сработает только один из них", Tone.Warning));
+            problems.TryAdd(b, ("такой же триггер уже есть — сработает только один из них", Tone.Warning));
         }
 
         foreach (var r in _rows)
@@ -771,7 +761,7 @@ internal sealed class SettingsWindow : Window
     private Control BuildTriggersPage(out Control cardEmpty)
     {
         // ── Left: search, filter, list ──────────────────────────────
-        var btnNew = UiTheme.Btn("+ Новый", "primary");
+        var btnNew = UiTheme.Btn("Новый", "primary");
         btnNew.Click += (_, _) => AddTrigger();
         ToolTip.SetTip(btnNew, "Ctrl+N");
         _search.TextChanged += (_, _) => RebuildList(_cur);
@@ -821,7 +811,8 @@ internal sealed class SettingsWindow : Window
         ToolTip.SetTip(btnDup, "Ctrl+D");
         ToolTip.SetTip(btnDel, "Delete в списке");
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        header.Children.Add(new StackPanel { Children = { _cardTitle, _cardSubtitle } });
+        _cardTitle.VerticalAlignment = VerticalAlignment.Center;
+        header.Children.Add(_cardTitle);
         var headButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Top, Children = { btnDup, btnDel } };
         Grid.SetColumn(headButtons, 1);
         header.Children.Add(headButtons);
@@ -837,19 +828,19 @@ internal sealed class SettingsWindow : Window
             ShowWhen();
         }));
 
-        _whenText.Children.Add(UiTheme.FieldLabel("Набранный текст"));
+        _whenText.Margin = new Thickness(0, 8, 0, 0);
         _whenText.Children.Add(_trigText);
         _trigText.TextChanged += (_, _) => { if (_cur != null && !_loading) _cur.Trigger = _trigText.Text ?? ""; };
         card.Children.Add(_whenText);
 
-        _whenHotkey.Children.Add(UiTheme.FieldLabel("Сочетание клавиш"));
+        _whenHotkey.Margin = new Thickness(0, 8, 0, 0);
         _hotkeyBtn.HorizontalAlignment = HorizontalAlignment.Left;
         _hotkeyBtn.Click += async (_, _) => await RecordAsync();
         _whenHotkey.Children.Add(_hotkeyBtn);
         card.Children.Add(_whenHotkey);
 
-        var chordLabel = UiTheme.FieldLabel("Зажать аккорд");
-        var restLabel = UiTheme.FieldLabel("и набрать буквы");
+        var chordLabel = UiTheme.FieldLabel("Аккорд");
+        var restLabel = UiTheme.FieldLabel("Буквы");
         Grid.SetColumn(restLabel, 1);
         _whenLeader.RowDefinitions = new RowDefinitions("Auto,Auto");
         _whenLeader.Children.Add(chordLabel);
@@ -876,14 +867,13 @@ internal sealed class SettingsWindow : Window
             ShowValueEditor();
         };
         card.Children.Add(_action);
-        card.Children.Add(_actionNote);
 
         // 3. Value — one of: multiline text + tokens / path + browse / macro picker
         card.Children.Add(_valueLabel);
         _valueText.TextChanged += (_, _) => { if (_cur != null && !_loading) _cur.Value = (_valueText.Text ?? "").Replace("\r\n", "\n"); };
         card.Children.Add(_valueText);
 
-        _tokens.Children.Add(new TextBlock { Text = "Вставить:", FontSize = UiTheme.FsCaption, Foreground = UiTheme.B(UiTheme.TextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 6) });
+        _tokens.Children.Add(new TextBlock { Text = "Вставить", FontSize = UiTheme.FsCaption, Foreground = UiTheme.B(UiTheme.TextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 6) });
         AddToken("Дата", "{date}", "Сегодняшняя дата (дд.мм.гггг)");
         AddToken("Время", "{time}", "Текущее время (чч:мм)");
         AddToken("Дата и время", "{datetime:dd.MM.yyyy HH:mm}", "Формат можно поменять после двоеточия");
@@ -913,7 +903,7 @@ internal sealed class SettingsWindow : Window
         };
         var btnOpenMacro = UiTheme.Btn("Открыть шаги");
         btnOpenMacro.Click += (_, _) => OpenMacro(_cur?.Value);
-        var btnNewMacro = UiTheme.Btn("+ Новый макрос", "ghost");
+        var btnNewMacro = UiTheme.Btn("Новый макрос", "link");
         btnNewMacro.Click += (_, _) =>
         {
             var m = AddMacro();
@@ -928,7 +918,7 @@ internal sealed class SettingsWindow : Window
 
         // 4. Where
         card.Children.Add(UiTheme.SectionHeader("Где работает"));
-        card.Children.Add(Segmented(_where, i =>
+        var whereSeg = Segmented(_where, i =>
         {
             if (_cur == null) return;
             _cur.Restricted = i == 1;
@@ -936,12 +926,20 @@ internal sealed class SettingsWindow : Window
             _cur.Context = ContextSpec.Build(_cur.Restricted, include, exclude);
             ShowWhere();
             Changed();
-        }));
+        });
+        // Exclusions are rare: an entry point next to the mode, the block only when used.
+        var addExclusion = UiTheme.Btn("Исключить…", "link", small: true);
+        addExclusion.VerticalAlignment = VerticalAlignment.Center;
+        ToolTip.SetTip(addExclusion, "Не срабатывать в выбранной программе");
+        addExclusion.Click += (_, _) => ShowProgramMenu(addExclusion, exclude: true);
+        whereSeg.Children.Add(addExclusion);
+        card.Children.Add(whereSeg);
         _includeBlock.Children.Add(UiTheme.FieldLabel("Программы"));
         _includeBlock.Children.Add(_includeChips);
         card.Children.Add(_includeBlock);
-        card.Children.Add(UiTheme.FieldLabel("Кроме"));
-        card.Children.Add(_excludeChips);
+        _excludeBlock.Children.Add(UiTheme.FieldLabel("Кроме"));
+        _excludeBlock.Children.Add(_excludeChips);
+        card.Children.Add(_excludeBlock);
 
         var manualOk = UiTheme.Btn("Добавить", small: true);
         var manualCancel = UiTheme.Btn("Отмена", "ghost", small: true);
@@ -960,8 +958,6 @@ internal sealed class SettingsWindow : Window
         _manualEntry.Children.Add(manualCancel);
         card.Children.Add(_manualEntry);
 
-        card.Children.Add(new Note("Программа указывается именем процесса (acad, winword, chrome) или частью заголовка окна. " +
-                                   "Кнопка «+ Добавить» показывает открытые сейчас окна."));
 
         _card.Content = card;
 
@@ -987,14 +983,14 @@ internal sealed class SettingsWindow : Window
             }
 
             var title = Bound(nameof(TriggerRow.DisplayTrigger), UiTheme.FsBody, FontWeight.SemiBold);
-            var tag = Bound(nameof(TriggerRow.KindTag), UiTheme.FsCaption);
-            tag.Foreground = UiTheme.B(UiTheme.TextGrey);
-            tag.Margin = new Thickness(8, 0, 0, 0);
+            title.FontFamily = UiTheme.Mono;
             var subtitle = Bound(nameof(TriggerRow.Subtitle), UiTheme.FsCaption, brushProp: nameof(TriggerRow.SubtitleBrush));
-            var where = Bound(nameof(TriggerRow.WhereText), UiTheme.FsCaption, brushProp: nameof(TriggerRow.WhereBrush));
+            subtitle.Margin = new Thickness(0, 2, 0, 0);
+            // Only a scope that differs from the default earns space in the row.
+            var where = Bound(nameof(TriggerRow.ListWhere), UiTheme.FsCaption, brushProp: nameof(TriggerRow.WhereBrush));
             where.Margin = new Thickness(8, 0, 0, 0);
-            where.MaxWidth = 120;
-            where.TextAlignment = TextAlignment.Right;
+            where.MaxWidth = 130;
+            where.VerticalAlignment = VerticalAlignment.Center;
 
             var grid = new Grid
             {
@@ -1003,13 +999,11 @@ internal sealed class SettingsWindow : Window
                 Margin = new Thickness(14, 7, 12, 7)
             };
             grid.Children.Add(title);
-            Grid.SetColumn(tag, 1);
-            grid.Children.Add(tag);
-            Grid.SetRow(subtitle, 1);
-            grid.Children.Add(subtitle);
-            Grid.SetRow(where, 1);
             Grid.SetColumn(where, 1);
             grid.Children.Add(where);
+            Grid.SetRow(subtitle, 1);
+            Grid.SetColumnSpan(subtitle, 2);
+            grid.Children.Add(subtitle);
 
             // Selection bar comes from the ListBoxItem style; a problem bar overrides it.
             var selectionBar = new Border { Width = 3, HorizontalAlignment = HorizontalAlignment.Left };
@@ -1048,7 +1042,7 @@ internal sealed class SettingsWindow : Window
 
     private void AddToken(string label, string token, string tip, string? select = null)
     {
-        var b = UiTheme.Btn(label, small: true);
+        var b = UiTheme.Btn(label, "link", small: true);
         b.Margin = new Thickness(0, 0, 4, 4);
         ToolTip.SetTip(b, $"{tip}\n{token}");
         b.Click += (_, _) =>
@@ -1169,8 +1163,6 @@ internal sealed class SettingsWindow : Window
     {
         if (_cur == null) return;
         _cardTitle.Text = _cur.DisplayTrigger;
-        int ai = Array.FindIndex(ActionInfo, a => a.Key == _cur.Action);
-        _cardSubtitle.Text = $"{(ai >= 0 ? ActionInfo[ai].Label : _cur.Action)} · {_cur.WhereText}";
     }
 
     private void ShowIssues()
@@ -1188,8 +1180,11 @@ internal sealed class SettingsWindow : Window
         _whenHotkey.IsVisible = _cur.Type == "Шорткат";
         _whenLeader.IsVisible = _cur.Type == "Лидер";
         string hk = _cur.Hotkey.Trim();
-        _hotkeyBtn.Content = hk.Length > 0 ? $"{hk}   ·   изменить" : "Записать сочетание…";
-        _chordBtn.Content = hk.Length > 0 ? $"{hk}   ·   изменить" : "Записать аккорд…";
+        _hotkeyBtn.Content = hk.Length > 0 ? hk : "Записать сочетание…";
+        _chordBtn.Content = hk.Length > 0 ? hk : "Записать аккорд…";
+        _hotkeyBtn.FontFamily = _chordBtn.FontFamily = hk.Length > 0 ? UiTheme.Mono : UiTheme.Font;
+        ToolTip.SetTip(_hotkeyBtn, hk.Length > 0 ? "Нажмите, чтобы записать заново" : null);
+        ToolTip.SetTip(_chordBtn, hk.Length > 0 ? "Нажмите, чтобы записать заново" : null);
 
         bool prev = _loading;
         _loading = true;
@@ -1197,12 +1192,8 @@ internal sealed class SettingsWindow : Window
         _leaderRest.Text = _cur.Trigger;
         _loading = prev;
 
-        _whenNote.Set(_cur.Type switch
-        {
-            "Шорткат" => "Ctrl/Alt + клавиша или отдельная F1–F12. Системные сочетания (Ctrl+C, Ctrl+S, Alt+Tab…) назначить нельзя.",
-            "Лидер"   => "Зажмите аккорд из 2–3 модификаторов (например Ctrl+Alt) и, не отпуская, наберите буквы. Во время набора в углу экрана видна подсказка.",
-            _         => "Набранные символы сотрутся и заменятся результатом. Начинайте триггер с ! или @, чтобы он не срабатывал в обычном тексте."
-        }, Tone.Neutral);
+        // Only the leader needs a word of explanation; the rest is self-evident.
+        _whenNote.Set(_cur.Type == "Лидер" ? "Зажмите аккорд и, не отпуская, наберите буквы." : "", Tone.Neutral);
     }
 
     private void ShowValueEditor()
@@ -1218,6 +1209,8 @@ internal sealed class SettingsWindow : Window
         _browseFolder.IsVisible = a == "open";
         _valueMacro.IsVisible = macro;
         _macroPreview.IsVisible = macro;
+        int hint = Array.FindIndex(ActionInfo, x => x.Key == a);
+        ToolTip.SetTip(_action, hint >= 0 ? ActionInfo[hint].Hint : null);
         _valueLabel.Text = a switch
         {
             "text"     => "Текст для вставки",
@@ -1235,8 +1228,6 @@ internal sealed class SettingsWindow : Window
             "launch" => "notepad.exe",
             _        => @"python C:\scripts\job.py"
         };
-        int ai = Array.FindIndex(ActionInfo, x => x.Key == a);
-        _actionNote.Set(ai >= 0 ? ActionInfo[ai].Hint : "", Tone.Neutral);
 
         bool prev = _loading;
         _loading = true;
@@ -1253,6 +1244,7 @@ internal sealed class SettingsWindow : Window
         ContextSpec.Parse(_cur.Context, out var include, out var exclude);
         BuildChips(_includeChips, include, exclude: false);
         BuildChips(_excludeChips, exclude, exclude: true);
+        _excludeBlock.IsVisible = exclude.Count > 0;
     }
 
     private void BuildChips(WrapPanel host, List<string> items, bool exclude)
@@ -1264,7 +1256,7 @@ internal sealed class SettingsWindow : Window
             chip.Removed += (_, _) => EditContext(exclude, list => list.RemoveAll(x => string.Equals(x, item, StringComparison.OrdinalIgnoreCase)));
             host.Children.Add(chip);
         }
-        var add = UiTheme.Btn(exclude ? "+ Исключение" : "+ Добавить", "ghost", small: true);
+        var add = UiTheme.Btn("Добавить…", "link", small: true);
         add.Margin = new Thickness(0, 0, 0, 6);
         add.Click += (_, _) => ShowProgramMenu(add, exclude);
         host.Children.Add(add);
@@ -1424,7 +1416,7 @@ internal sealed class SettingsWindow : Window
         _rows.Insert(_rows.IndexOf(_cur) + 1, copy);
         Changed();
         ShowRow(copy);
-        _snack.Show("Создана копия — поменяйте триггер, чтобы не было конфликта");
+        _snack.Show("Копия создана");
     }
 
     private void DeleteTrigger()
@@ -1438,7 +1430,7 @@ internal sealed class SettingsWindow : Window
         RebuildFilter();
         var rest = _view.Where(r => r != row).ToList();
         RebuildList(rest.Count > 0 ? rest[Math.Clamp(viewAt, 0, rest.Count - 1)] : null);
-        _snack.Show($"Удалён «{row.DisplayTrigger}»", Tone.Neutral, "Вернуть", () =>
+        _snack.Show($"«{row.DisplayTrigger}» удалён", Tone.Neutral, "Вернуть", () =>
         {
             _rows.Insert(Math.Min(at, _rows.Count), row);
             Changed();
@@ -1499,7 +1491,7 @@ internal sealed class SettingsWindow : Window
 
     private Control BuildMacrosPage(out Control macroCard, out Control macroEmpty)
     {
-        var btnNew = UiTheme.Btn("+ Новый макрос", "primary");
+        var btnNew = UiTheme.Btn("Новый макрос", "primary");
         btnNew.HorizontalAlignment = HorizontalAlignment.Left;
         btnNew.Click += (_, _) => { var m = AddMacro(); RebuildMacroList(m); _macroName.Focus(); _macroName.SelectAll(); };
 
@@ -1564,7 +1556,7 @@ internal sealed class SettingsWindow : Window
         nameGrid.Children.Add(btnDel);
 
         var stepButtons = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
-        stepButtons.Children.Add(new TextBlock { Text = "Добавить шаг:", FontSize = UiTheme.FsCaption, Foreground = UiTheme.B(UiTheme.TextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 4) });
+        stepButtons.Children.Add(new TextBlock { Text = "Добавить", FontSize = UiTheme.FsCaption, Foreground = UiTheme.B(UiTheme.TextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 4) });
         AddStep(stepButtons, "Ввести текст", "type ", "текст", "Напечатать текст (токены {date}, {time} работают)");
         AddStep(stepButtons, "Нажать клавиши", "key ", "Ctrl+S", "Сочетание или клавиша: Ctrl+S, Enter, F5, Alt+Tab");
         AddStep(stepButtons, "Пауза", "sleep ", "300", "Подождать, мс");
@@ -1584,12 +1576,9 @@ internal sealed class SettingsWindow : Window
         {
             Children = { nameGrid, _macroIssues, _macroUsage, UiTheme.SectionHeader("Шаги"), stepButtons }
         };
-        var bottom = new Note("Один шаг на строку, выполняются сверху вниз. Пустые строки и строки с # пропускаются.");
         var cardDock = new DockPanel { Margin = new Thickness(18, 10, 18, 18) };
         DockPanel.SetDock(top, Dock.Top);
-        DockPanel.SetDock(bottom, Dock.Bottom);
         cardDock.Children.Add(top);
-        cardDock.Children.Add(bottom);
         cardDock.Children.Add(_macroSteps);
         macroCard = cardDock;
 
@@ -1603,7 +1592,7 @@ internal sealed class SettingsWindow : Window
 
     private void AddStep(WrapPanel host, string label, string prefix, string placeholder, string tip)
     {
-        var b = UiTheme.Btn(label, small: true);
+        var b = UiTheme.Btn(label, "link", small: true);
         b.Margin = new Thickness(0, 0, 4, 4);
         ToolTip.SetTip(b, tip);
         b.Click += (_, _) =>
@@ -1716,7 +1705,7 @@ internal sealed class SettingsWindow : Window
         Changed();
         RebuildMacroList(_macroRows.Count > 0 ? _macroRows[Math.Min(at, _macroRows.Count - 1)] : null);
         int users = UsersOf(row.Def).Count;
-        _snack.Show($"Удалён макрос «{row.Def.Name}»" + (users > 0 ? $" — он нужен триггерам: {users}" : ""),
+        _snack.Show($"Макрос «{row.Def.Name}» удалён" + (users > 0 ? $", его используют триггеры: {users}" : ""),
             users > 0 ? Tone.Warning : Tone.Neutral, "Вернуть", () =>
             {
                 _macroRows.Insert(Math.Min(at, _macroRows.Count), row);
@@ -1788,6 +1777,7 @@ internal sealed class SettingsWindow : Window
     private sealed class UnderlineTab : Button
     {
         private readonly TextBlock _text = new() { FontSize = UiTheme.FsLabel };
+        private readonly TextBlock _count = new() { FontSize = UiTheme.FsLabel, Foreground = UiTheme.B(UiTheme.TextGrey), Margin = new Thickness(5, 0, 0, 0) };
         private readonly Border _line = new() { Height = 2, Margin = new Thickness(0, 7, 0, 0) };
 
         public UnderlineTab()
@@ -1795,13 +1785,16 @@ internal sealed class SettingsWindow : Window
             Classes.Add("ghost");
             Padding = new Thickness(12, 9, 12, 0);
             CornerRadius = new CornerRadius(0);
-            Content = new StackPanel { Children = { _text, _line } };
+            Content = new StackPanel
+            {
+                Children = { new StackPanel { Orientation = Orientation.Horizontal, Children = { _text, _count } }, _line }
+            };
             Active = false;
         }
 
         protected override Type StyleKeyOverride => typeof(Button);
 
-        public string Label { set => _text.Text = value; }
+        public void Set(string label, int count) { _text.Text = label; _count.Text = count.ToString(); }
 
         public bool Active
         {

@@ -128,6 +128,7 @@ internal static class UiTheme
         AddButtonStates(s, x => x.OfType<Button>().Class("primary"), AccentBtn, Colors.White, AccentBtn, Accent, Accent, Accent);
         AddButtonStates(s, x => x.OfType<Button>().Class("danger"), PanelBg, Error, ErrorBorder, ErrorBg, ErrorBorder, ErrorBorder);
         AddButtonStates(s, x => x.OfType<Button>().Class("ghost"), Colors.Transparent, TextMuted, Colors.Transparent, HoverBg, Colors.Transparent, Divider);
+        AddButtonStates(s, x => x.OfType<Button>().Class("link"), Colors.Transparent, AccentBtn, Colors.Transparent, AccentSoft, Colors.Transparent, AccentChipBg);
         AddButtonStates(s, x => x.OfType<Button>().Class("onDark"), Colors.Transparent, Colors.White, Colors.Transparent,
             Color.FromArgb(40, 255, 255, 255), Colors.Transparent, Color.FromArgb(70, 255, 255, 255));
         s.Add(Set<Button>(x => x.OfType<Button>().Class("primary").Class(":disabled").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter"),
