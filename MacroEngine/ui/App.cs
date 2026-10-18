@@ -7,8 +7,8 @@ using Avalonia.Themes.Fluent;
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Avalonia application shell. MacroEngine intentionally follows the native
-/// Windows/Fluent visual language and leaves accent selection to the system theme.
+/// Avalonia application shell. Visuals follow the design language shared with the
+/// GeoBase / plx-construct / SoilStiffness tools (light, blue-grey, compact) — see UiTheme.
 /// </summary>
 internal sealed class App : Application
 {
@@ -17,13 +17,7 @@ internal sealed class App : Application
 
     public override void Initialize()
     {
-        Styles.Add(new FluentTheme());
-        Styles.Add(new StyleInclude(new Uri("avares://MacroEngine"))
-        {
-            Source = new Uri("avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml")
-        });
-
-        RequestedThemeVariant = ThemeVariant.Dark;
+        UiTheme.Apply(this);
     }
 
     public override void OnFrameworkInitializationCompleted()

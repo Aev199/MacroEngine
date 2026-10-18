@@ -155,7 +155,7 @@ internal sealed class HelpWindow : Window
     private static Border Divider() => new()
     {
         Height = 1,
-        Background = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+        Background = UiTheme.B(UiTheme.Divider),
         Margin = new Thickness(0, 2)
     };
 
