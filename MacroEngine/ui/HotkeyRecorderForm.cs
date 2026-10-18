@@ -32,20 +32,23 @@ internal sealed class HotkeyRecorderForm : Form
         _leaderMode = leaderMode;
 
         Text = leaderMode ? "Запись лидер-аккорда" : "Запись сочетания";
-        Size = new Size(360, 150);
+        Theme.ApplyForm(this);
+        BackColor = Theme.PanelBg;
+        ClientSize = new Size(Theme.S(380), Theme.S(130));
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = false;
         MaximizeBox = false;
+        ShowInTaskbar = false;
         KeyPreview = true;
-        Icon = AppIcon.Get();
 
         _label = new Label
         {
             Text = DefaultPrompt(),
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Segoe UI", 11)
+            Font = Theme.PanelTitle,
+            ForeColor = Theme.Text
         };
 
         Controls.Add(_label);

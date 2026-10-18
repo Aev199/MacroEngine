@@ -43,7 +43,8 @@ MacroEngine/
 ├── config/
 │   └── triggers.json        # Триггеры
 ├── ui/
-│   ├── SettingsForm.cs      # DataGridView редактор триггеров
+│   ├── SettingsForm.cs      # Редактор: список + карточка («Когда / Что / Где»), вкладка макросов
+│   ├── Theme.cs             # Дизайн-токены GeoBase (tokens.css) + базовые контролы: кнопки, вкладки, заметки, снекбар
 │   └── TrayApplicationContext.cs  # Системный трей + координация
 └── Program.cs               # [STAThread] точка входа
 
@@ -70,6 +71,10 @@ MacroEngine/
 
 * ✅ Системный трей: Start/Stop/Reload/Quit (`ui/TrayApplicationContext.cs`)
 * ✅ Редактор триггеров: DataGridView с Add/Delete/Save (`ui/SettingsForm.cs`)
+* ✅ Редизайн UI в дизайн-коде GeoBase/plx-construct (`ui/Theme.cs`): список + карточка вместо таблицы,
+  понятные названия действий, выбор программ из открытых окон, кнопки токенов и шагов,
+  живая валидация и конфликты, одно сохранение (Ctrl+S), снекбары с «Вернуть» вместо MessageBox;
+  трей: двойной клик → редактор, «Пауза» с серой иконкой; триггеры не срабатывают внутри окон MacroEngine
 * ✅ Защита от залипания: `IsSuppressed`, корректный Dispose хуков
 
 **Этап 4: Интеграция с рабочим софтом** 🔜

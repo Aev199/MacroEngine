@@ -8,6 +8,31 @@ namespace MacroEngine.UI;
 internal static class AppIcon
 {
     private static Icon? _cached;
+    private static Icon? _paused;
+
+    /// <summary>Greyed-out variant shown in the tray while the engine is paused.</summary>
+    public static Icon GetPaused()
+    {
+        if (_paused != null) return _paused;
+        using var src = Get().ToBitmap();
+        using var bmp = new Bitmap(src.Width, src.Height);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            var gray = new System.Drawing.Imaging.ColorMatrix(new[]
+            {
+                new[] { 0.3f, 0.3f, 0.3f, 0f, 0f },
+                new[] { 0.59f, 0.59f, 0.59f, 0f, 0f },
+                new[] { 0.11f, 0.11f, 0.11f, 0f, 0f },
+                new[] { 0f, 0f, 0f, 0.55f, 0f },
+                new[] { 0f, 0f, 0f, 0f, 1f }
+            });
+            using var attrs = new System.Drawing.Imaging.ImageAttributes();
+            attrs.SetColorMatrix(gray);
+            g.DrawImage(src, new Rectangle(0, 0, bmp.Width, bmp.Height), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel, attrs);
+        }
+        _paused = Icon.FromHandle(bmp.GetHicon());
+        return _paused;
+    }
 
     public static Icon Get()
     {

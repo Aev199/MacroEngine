@@ -14,22 +14,26 @@ internal sealed class PromptForm : Form
     private PromptForm(string label, string[]? choices)
     {
         Text = "MacroEngine";
+        Theme.ApplyForm(this);
+        BackColor = Theme.PanelBg;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
         MinimizeBox = false;
         MaximizeBox = false;
         ShowInTaskbar = false;
         TopMost = true;
-        ClientSize = new Size(340, 112);
-        Icon = AppIcon.Get();
+        int w = Theme.S(360), pad = Theme.S(14);
 
         var lbl = new Label
         {
             Text = label,
             AutoSize = true,
-            Location = new Point(12, 14),
-            MaximumSize = new Size(316, 0)
+            Font = Theme.LabelBold,
+            ForeColor = Theme.TextMuted,
+            Location = new Point(pad, pad),
+            MaximumSize = new Size(w - pad * 2, 0)
         };
+        int y = pad + lbl.PreferredHeight + Theme.S(6);
 
         Control input;
         if (choices != null)
@@ -37,8 +41,9 @@ internal sealed class PromptForm : Form
             _combo = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                Location = new Point(12, 46),
-                Width = 316
+                FlatStyle = FlatStyle.Flat,
+                Location = new Point(pad, y),
+                Width = w - pad * 2
             };
             _combo.Items.AddRange(choices);
             if (_combo.Items.Count > 0) _combo.SelectedIndex = 0;
@@ -46,12 +51,18 @@ internal sealed class PromptForm : Form
         }
         else
         {
-            _text = new TextBox { Location = new Point(12, 46), Width = 316 };
-            input = _text;
+            var box = new InputBox { Location = new Point(pad, y), Width = w - pad * 2 };
+            _text = box.Box;
+            input = box;
         }
 
-        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(172, 78), Width = 75 };
-        var cancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(253, 78), Width = 75 };
+        var cancel = new GbButton("Отмена") { DialogResult = DialogResult.Cancel, Margin = Padding.Empty };
+        var ok = new GbButton("OK", ButtonKind.Primary) { DialogResult = DialogResult.OK, Margin = Padding.Empty };
+        int by = y + input.Height + Theme.S(14);
+        cancel.Location = new Point(w - pad - cancel.PreferredSize.Width, by);
+        ok.Location = new Point(cancel.Left - Theme.S(6) - Math.Max(ok.PreferredSize.Width, Theme.S(64)), by);
+        ok.MinimumSize = new Size(Theme.S(64), ok.MinimumSize.Height);
+        ClientSize = new Size(w, by + cancel.PreferredSize.Height + pad);
 
         Controls.AddRange(new Control[] { lbl, input, ok, cancel });
         AcceptButton = ok;

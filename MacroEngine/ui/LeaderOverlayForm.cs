@@ -11,19 +11,20 @@ internal sealed class LeaderOverlayForm : Form
         ShowInTaskbar = false;
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
-        BackColor = Color.FromArgb(30, 30, 30);
-        Opacity = 0.88;
-        Size = new Size(240, 44);
+        // Same look as the editor's snackbar: dark blue-grey strip, white text.
+        BackColor = Theme.Text;
+        Opacity = 0.94;
+        Size = new Size(Theme.S(260), Theme.S(44));
 
         var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
-        Location = new Point(screen.Right - Width - 16, screen.Bottom - Height - 16);
+        Location = new Point(screen.Right - Width - Theme.S(16), screen.Bottom - Height - Theme.S(16));
 
         _label = new Label
         {
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Segoe UI", 13f, FontStyle.Bold),
-            ForeColor = Color.FromArgb(200, 220, 255)
+            Font = Theme.Title,
+            ForeColor = Theme.AccentChipBg
         };
         Controls.Add(_label);
 
@@ -34,7 +35,7 @@ internal sealed class LeaderOverlayForm : Form
     public void ShowLeader(string mods, string seq)
     {
         _label.Text = seq.Length > 0 ? $"{mods} → {seq}…" : $"{mods} → …";
-        _label.ForeColor = Color.FromArgb(200, 220, 255);
+        _label.ForeColor = Theme.AccentChipBg;
         _hideTimer.Stop();
         _hideTimer.Interval = 1500;
         _hideTimer.Start();
@@ -44,7 +45,7 @@ internal sealed class LeaderOverlayForm : Form
     public void ShowMatched(string mods, string seq)
     {
         _label.Text = $"✓ {mods} → {seq}";
-        _label.ForeColor = Color.FromArgb(100, 240, 140);
+        _label.ForeColor = Theme.SuccessBg;
         _hideTimer.Stop();
         _hideTimer.Interval = 600;
         _hideTimer.Start();
