@@ -1,222 +1,284 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using MacroEngine.Core;
 
 namespace MacroEngine.UI;
 
-/// <summary>Product information, support paths and privacy-safe diagnostics.</summary>
+/// <summary>Version and updates, where the data lives, privacy-safe diagnostics.</summary>
 internal sealed class AboutWindow : Window
 {
-    private static readonly FontFamily MonoFont =
-        new("Cascadia Mono,Consolas,monospace");
+    private readonly UpdateCoordinator _updates;
+    private readonly Snackbar _snack = new();
 
-    private readonly TextBlock _status;
-
-    public AboutWindow(Action openHelp)
+    private readonly TextBlock _updateStatus = new() { FontSize = UiTheme.FsBody, TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock _updateDetail = new() { FontSize = UiTheme.FsCaption, Foreground = UiTheme.B(UiTheme.TextGrey), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0) };
+    private readonly ProgressBar _progress = new() { Minimum = 0, Maximum = 1, Height = 4, MinHeight = 4, Margin = new Thickness(0, 8, 0, 0), IsVisible = false };
+    private readonly Button _updateAction = UiTheme.Btn("", "primary");
+    private readonly Button _notesToggle = UiTheme.Btn("Что нового", "link", small: true);
+    private readonly Button _releasePage = UiTheme.Btn("Страница релиза", "link", small: true);
+    private readonly Border _notes = new()
     {
+        Background = UiTheme.B(UiTheme.SectionBg),
+        CornerRadius = new CornerRadius(4),
+        Padding = new Thickness(14, 10),
+        Margin = new Thickness(0, 10, 0, 0),
+        MaxHeight = 220,
+        IsVisible = false
+    };
+    private readonly CheckBox _autoCheck = new() { Content = "Проверять обновления раз в день", FontSize = UiTheme.FsLabel };
+
+    public AboutWindow(UpdateCoordinator updates, Action openHelp)
+    {
+        _updates = updates;
+
         Title = "MacroEngine — О программе";
-        Width = 590;
-        Height = 420;
+        Width = 600;
+        Height = 620;
         MinWidth = 520;
-        MinHeight = 350;
-        CanResize = true;
+        MinHeight = 480;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Icon = AppIcon.Get();
 
-        _status = new TextBlock
-        {
-            Opacity = 0.56,
-            FontSize = 11,
-            TextWrapping = TextWrapping.Wrap,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-
-        var summary = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("110,*"),
-            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto")
-        };
-        AddRow(summary, 0, "Программа", "MacroEngine");
-        AddRow(summary, 1, "Версия", ProductInfo.DisplayVersion, mono: true);
-        AddRow(summary, 2, "Данные", AppPaths.IsPortable ? "Portable" : "LocalAppData");
-        AddRow(summary, 3, "Диагностика", AppLog.DiagnosticEnabled ? "включена" : "выключена");
-
-        var help = new Button { Content = "Справка", Classes = { "accent" } };
-        var openData = new Button { Content = "Папка данных" };
-        var copyDiagnostics = new Button { Content = "Копировать диагностику" };
-
-        help.Click += (_, _) => openHelp();
-        openData.Click += (_, _) => Run(
-            () => ShellTools.OpenDirectory(AppPaths.RootDirectory),
-            "Папка данных открыта.");
-        copyDiagnostics.Click += (_, _) => Run(() =>
-        {
-            System.Windows.Forms.Clipboard.SetText(ProductInfo.BuildDiagnosticSummary());
-        }, "Диагностика скопирована без пользовательских данных.");
-
-        var actions = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            Children = { help, openData, copyDiagnostics }
-        };
-
-        var details = BuildTechnicalDetails();
-        details.IsVisible = false;
-        var detailsButton = new Button
-        {
-            Content = "Техническая информация...",
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(7, 3)
-        };
-        detailsButton.Click += (_, _) =>
-        {
-            details.IsVisible = !details.IsVisible;
-            detailsButton.Content = details.IsVisible
-                ? "Скрыть техническую информацию"
-                : "Техническая информация...";
-        };
-
-        var content = new StackPanel
-        {
-            Margin = new Thickness(16),
-            Spacing = 11,
-            Children = { summary, actions, detailsButton, details }
-        };
-
-        var close = new Button { Content = "Закрыть", MinWidth = 84, IsCancel = true };
-        close.Click += (_, _) => Close();
-
-        var footer = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(16, 0, 16, 12)
-        };
-        footer.Children.Add(_status);
-        Grid.SetColumn(close, 1);
-        footer.Children.Add(close);
+        var page = new StackPanel { Margin = new Thickness(24, 22, 24, 24) };
+        page.Children.Add(BuildHeader(openHelp));
+        page.Children.Add(UiTheme.SectionHeader("Обновления"));
+        page.Children.Add(BuildUpdates());
+        page.Children.Add(UiTheme.SectionHeader("Данные"));
+        page.Children.Add(BuildData());
 
         Content = new Grid
         {
-            RowDefinitions = new RowDefinitions("*,Auto"),
-            Children = { new ScrollViewer { Content = content }, footer }
-        };
-        Grid.SetRow(footer, 1);
-    }
-
-    private StackPanel BuildTechnicalDetails()
-    {
-        var openConfig = new Button { Content = "Конфиги" };
-        var openLogs = new Button { Content = "Логи" };
-        var openLog = new Button { Content = "Журнал" };
-        var github = new Button { Content = "GitHub" };
-
-        openConfig.Click += (_, _) => Run(
-            () => ShellTools.OpenDirectory(AppPaths.ConfigDirectory),
-            "Папка конфигурации открыта.");
-        openLogs.Click += (_, _) => Run(
-            () => ShellTools.OpenDirectory(AppPaths.LogDirectory),
-            "Папка журналов открыта.");
-        openLog.Click += (_, _) => Run(
-            () => ShellTools.OpenFileOrParent(AppPaths.LogFile),
-            "Журнал открыт.");
-        github.Click += (_, _) => Run(
-            () => ShellTools.OpenUrl(ProductInfo.RepositoryUrl),
-            "Репозиторий открыт в браузере.");
-
-        var buttons = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            Children = { openConfig, openLogs, openLog, github }
-        };
-
-        return new StackPanel
-        {
-            Spacing = 6,
             Children =
             {
-                PathRow("Программа", AppPaths.ApplicationDirectory),
-                PathRow("Данные", AppPaths.RootDirectory),
-                PathRow("Триггеры", AppPaths.TriggersFile),
-                PathRow("Макросы", AppPaths.MacrosFile),
-                PathRow("Журнал", AppPaths.LogFile),
-                buttons,
-                new TextBlock
-                {
-                    Text = AppLog.DiagnosticEnabled
-                        ? "Диагностический журнал может содержать сведения о клавишах, раскладке и активных окнах."
-                        : "Обычный журнал не содержит текст подстановок, команды, макросы и содержимое буфера обмена.",
-                    TextWrapping = TextWrapping.Wrap,
-                    Opacity = 0.54,
-                    FontSize = 11,
-                    Margin = new Thickness(0, 2, 0, 0)
-                }
+                new ScrollViewer { Content = page },
+                _snack
             }
         };
+
+        _updates.Changed += Refresh;
+        Closed += (_, _) => _updates.Changed -= Refresh;
+        KeyDown += (_, e) => { if (e.Key == Avalonia.Input.Key.Escape) Close(); };
+        Refresh();
     }
 
-    private static void AddRow(Grid grid, int row, string label, string value, bool mono = false)
-    {
-        var labelBlock = new TextBlock
-        {
-            Text = label,
-            Opacity = 0.54,
-            Margin = new Thickness(0, 3),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        Grid.SetRow(labelBlock, row);
-        grid.Children.Add(labelBlock);
+    /// <summary>Confirmation after the updater restarted into a new version.</summary>
+    public void ShowUpdated() => _snack.Show($"Установлена версия {ProductInfo.DisplayVersion}", Tone.Success);
 
-        var valueBlock = new TextBlock
-        {
-            Text = value,
-            Margin = new Thickness(0, 3),
-            VerticalAlignment = VerticalAlignment.Center,
-            FontFamily = mono ? MonoFont : FontFamily.Default
-        };
-        Grid.SetRow(valueBlock, row);
-        Grid.SetColumn(valueBlock, 1);
-        grid.Children.Add(valueBlock);
-    }
-
-    private static Control PathRow(string label, string value)
+    private Control BuildHeader(Action openHelp)
     {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("82,*") };
-        grid.Children.Add(new TextBlock
+        var name = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        name.Children.Add(new TextBlock { Text = "MacroEngine", FontSize = UiTheme.FsTitle + 4, FontWeight = FontWeight.Bold });
+        name.Children.Add(new TextBlock
         {
-            Text = label,
-            Opacity = 0.5,
-            VerticalAlignment = VerticalAlignment.Center,
-            FontSize = 11
+            Text = ProductInfo.Version,
+            FontFamily = UiTheme.Mono,
+            FontSize = UiTheme.FsBody,
+            Foreground = UiTheme.B(UiTheme.TextMuted),
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 3)
         });
 
-        var path = new TextBox
+        var help = UiTheme.Btn("Справка", "link", small: true);
+        var github = UiTheme.Btn("GitHub", "link", small: true);
+        help.Click += (_, _) => openHelp();
+        github.Click += (_, _) => Run(() => ShellTools.OpenUrl(ProductInfo.RepositoryUrl));
+        var links = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(-8, 4, 0, 0), Children = { help, github } };
+
+        var text = new StackPanel
         {
-            Text = value,
-            IsReadOnly = true,
-            FontFamily = MonoFont,
-            FontSize = 11,
-            Padding = new Thickness(5, 3)
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                name,
+                new TextBlock
+                {
+                    Text = "Подстановки текста, сочетания клавиш и макросы для Windows.",
+                    FontSize = UiTheme.FsBody,
+                    Foreground = UiTheme.B(UiTheme.TextMuted),
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 2, 0, 0)
+                },
+                links
+            }
         };
-        Grid.SetColumn(path, 1);
-        grid.Children.Add(path);
-        return grid;
+
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        row.Children.Add(new Image { Source = AppIcon.Image(), Width = 56, Height = 56, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 2, 16, 0) });
+        Grid.SetColumn(text, 1);
+        row.Children.Add(text);
+        return row;
     }
 
-    private void Run(Action action, string success)
+    private Control BuildUpdates()
+    {
+        _updateAction.Click += async (_, _) =>
+        {
+            switch (_updates.Stage)
+            {
+                case UpdateStage.Available:
+                    await _updates.InstallAsync();
+                    break;
+                case UpdateStage.Downloading:
+                    _updates.Cancel();
+                    break;
+                case UpdateStage.Installed:
+                    if (!_updates.Restart())
+                        _snack.Show("Закройте окно настроек, чтобы перезапустить MacroEngine", Tone.Warning);
+                    break;
+                default:
+                    await _updates.CheckAsync();
+                    if (_updates.Stage == UpdateStage.UpToDate) _snack.Show("Установлена последняя версия");
+                    break;
+            }
+        };
+        _notesToggle.Click += (_, _) =>
+        {
+            _notes.IsVisible = !_notes.IsVisible;
+            _notesToggle.Content = _notes.IsVisible ? "Скрыть изменения" : "Что нового";
+        };
+        _releasePage.Click += (_, _) =>
+        {
+            if (_updates.Release?.PageUrl is { Length: > 0 } url) Run(() => ShellTools.OpenUrl(url));
+        };
+        _autoCheck.IsCheckedChanged += (_, _) => _updates.AutoCheck = _autoCheck.IsChecked == true;
+        _autoCheck.Margin = new Thickness(0, 12, 0, 0);
+
+        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        top.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { _updateStatus, _updateDetail } });
+        _updateAction.VerticalAlignment = VerticalAlignment.Center;
+        _updateAction.Margin = new Thickness(16, 0, 0, 0);
+        Grid.SetColumn(_updateAction, 1);
+        top.Children.Add(_updateAction);
+
+        var links = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(-8, 4, 0, 0), Children = { _notesToggle, _releasePage } };
+        _notes.Child = new ScrollViewer();
+
+        return new StackPanel { Children = { top, _progress, links, _notes, _autoCheck } };
+    }
+
+    private void Refresh()
+    {
+        ReleaseInfo? r = _updates.Release;
+        string lastCheck = _updates.LastCheck is { } t ? $"Последняя проверка: {t.ToLocalTime():dd.MM.yyyy HH:mm}" : "Ещё не проверялось";
+        (string status, string detail, string? action, Color color) = _updates.Stage switch
+        {
+            UpdateStage.Checking    => ("Проверка обновлений…", lastCheck, null, UiTheme.Text),
+            UpdateStage.UpToDate    => ("Установлена последняя версия", lastCheck, "Проверить", UiTheme.Text),
+            UpdateStage.Available   => ($"Доступна версия {r!.Version}", ReleaseDetail(r), $"Обновить до {r.Version}", UiTheme.Accent),
+            UpdateStage.Downloading => ($"Загрузка {r!.Version}… {_updates.Progress:P0}", SizeText(r.PackageSize), "Отменить", UiTheme.Text),
+            UpdateStage.Installed   => ($"Версия {r!.Version} установлена", "Перезапустите MacroEngine, чтобы перейти на неё.", "Перезапустить", UiTheme.Success),
+            UpdateStage.Failed      => (_updates.Error ?? "Не удалось обновиться", lastCheck, "Повторить", UiTheme.Error),
+            _                       => (_updates.LastCheck == null ? "Обновления ещё не проверялись" : "При последней проверке новых версий не было", _updates.LastCheck == null ? "" : lastCheck, "Проверить", UiTheme.Text)
+        };
+
+        _updateStatus.Text = status;
+        _updateStatus.Foreground = UiTheme.B(color);
+        _updateStatus.FontWeight = _updates.Stage is UpdateStage.Available or UpdateStage.Installed ? FontWeight.SemiBold : FontWeight.Normal;
+        _updateDetail.Text = detail;
+        _updateDetail.IsVisible = detail.Length > 0;
+        _updateAction.IsVisible = action != null;
+        _updateAction.Content = action;
+        _updateAction.Classes.Set("primary", _updates.Stage is UpdateStage.Available or UpdateStage.Installed);
+        _progress.IsVisible = _updates.Stage == UpdateStage.Downloading;
+        _progress.Value = _updates.Progress;
+
+        bool hasRelease = r != null && _updates.Stage is UpdateStage.Available or UpdateStage.Downloading or UpdateStage.Installed;
+        _notesToggle.IsVisible = hasRelease && r!.Notes.Trim().Length > 0;
+        _releasePage.IsVisible = hasRelease && r!.PageUrl.Length > 0;
+        if (!_notesToggle.IsVisible) _notes.IsVisible = false;
+        if (hasRelease && _notes.Child is ScrollViewer sv && sv.Tag as ReleaseInfo != r)
+        {
+            sv.Tag = r;
+            sv.Content = MarkdownView.Render(MarkdownLite.Parse(r!.Notes));
+        }
+        _autoCheck.IsChecked = _updates.AutoCheck;
+    }
+
+    private static string ReleaseDetail(ReleaseInfo r)
+    {
+        string date = r.Published == default ? "" : $"от {r.Published.ToLocalTime():dd.MM.yyyy}";
+        string kind = r.Prerelease ? "бета" : "";
+        return string.Join(" · ", new[] { date, SizeText(r.PackageSize), kind }.Where(s => s.Length > 0));
+    }
+
+    private static string SizeText(long bytes) => bytes > 0 ? $"{bytes / 1024d / 1024d:0.#} МБ" : "";
+
+    private Control BuildData()
+    {
+        var rows = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        int row = 0;
+        void Path(string label, string path, Action open)
+        {
+            rows.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            var l = UiTheme.Caption(label);
+            l.Margin = new Thickness(0, 0, 14, 0);
+            var value = new SelectableTextBlock
+            {
+                Text = path,
+                FontFamily = UiTheme.Mono,
+                FontSize = UiTheme.FsCaption,
+                TextTrimming = TextTrimming.PathSegmentEllipsis,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            ToolTip.SetTip(value, path);
+            var btn = UiTheme.Btn("Открыть", "link", small: true);
+            btn.Click += (_, _) => Run(open);
+            Grid.SetRow(l, row); Grid.SetRow(value, row); Grid.SetRow(btn, row);
+            Grid.SetColumn(value, 1); Grid.SetColumn(btn, 2);
+            rows.Children.Add(l); rows.Children.Add(value); rows.Children.Add(btn);
+            row++;
+        }
+        Path("Настройки", AppPaths.RootDirectory, () => ShellTools.OpenDirectory(AppPaths.RootDirectory));
+        Path("Журнал", AppPaths.LogFile, () => ShellTools.OpenFileOrParent(AppPaths.LogFile));
+        Path("Программа", AppPaths.ApplicationDirectory, () => ShellTools.OpenDirectory(AppPaths.ApplicationDirectory));
+
+        var mode = new TextBlock
+        {
+            Text = (AppPaths.IsPortable ? "Портативный режим: данные хранятся рядом с программой. " : "") +
+                   (AppLog.DiagnosticEnabled
+                       ? "Диагностическое логирование включено — журнал может содержать сведения о клавишах и окнах."
+                       : "Журнал не содержит набранный текст, подстановки, команды и буфер обмена."),
+            FontSize = UiTheme.FsCaption,
+            Foreground = UiTheme.B(AppLog.DiagnosticEnabled ? UiTheme.Warning : UiTheme.TextGrey),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+
+        var copy = UiTheme.Btn("Копировать диагностику");
+        copy.HorizontalAlignment = HorizontalAlignment.Left;
+        copy.Margin = new Thickness(0, 12, 0, 0);
+        ToolTip.SetTip(copy, "Версия, ОС и пути к служебным файлам — без триггеров и их значений");
+        copy.Click += async (_, _) =>
+        {
+            try
+            {
+                if (Clipboard != null)
+                    await Clipboard.SetTextAsync(ProductInfo.BuildDiagnosticSummary());
+                _snack.Show("Диагностика скопирована");
+            }
+            catch (Exception ex)
+            {
+                AppLog.Write($"Copy diagnostics failed: {ex.GetType().Name}: {ex.Message}");
+                _snack.Show("Не удалось скопировать: " + ex.Message, Tone.Error);
+            }
+        };
+
+        return new StackPanel { Children = { rows, mode, copy } };
+    }
+
+    private void Run(Action action)
     {
         try
         {
             action();
-            _status.Text = success;
         }
         catch (Exception ex)
         {
-            AppLog.Write($"Support UI action failed: {ex.GetType().Name}: {ex.Message}");
-            _status.Text = $"Ошибка: {ex.Message}";
+            AppLog.Write($"About action failed: {ex.GetType().Name}: {ex.Message}");
+            _snack.Show("Ошибка: " + ex.Message, Tone.Error);
         }
     }
 }

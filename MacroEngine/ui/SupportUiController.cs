@@ -6,20 +6,35 @@ using MacroEngine.Core;
 namespace MacroEngine.UI;
 
 /// <summary>
-/// Adds non-critical help and support commands after the main tray controller has
-/// been initialized. It deliberately does not participate in keyboard execution.
+/// Adds help, About and update commands after the main tray controller has been
+/// initialized. It deliberately does not participate in keyboard execution.
 /// </summary>
 internal sealed class SupportUiController : IDisposable
 {
+    private readonly UpdateCoordinator _updates;
+    private NativeMenuItem? _updateItem;
     private HelpWindow? _helpWindow;
     private AboutWindow? _aboutWindow;
     private bool _disposed;
 
-    public SupportUiController()
+    public SupportUiController(Func<bool> restartForUpdate)
     {
+        _updates = new UpdateCoordinator(restartForUpdate);
+        _updates.Changed += RefreshUpdateItem;
         AttachTrayItems();
 
-        if (!File.Exists(AppPaths.HelpFirstRunMarker))
+        // Leftovers of the previous version are unlocked once its process has exited.
+        Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10));
+            UpdateService.CleanupLeftovers(AppPaths.ApplicationDirectory, AppPaths.UpdatesDirectory);
+        });
+
+        if (_updates.JustUpdated)
+        {
+            Dispatcher.UIThread.Post(() => { OpenAbout(); _aboutWindow?.ShowUpdated(); });
+        }
+        else if (!File.Exists(AppPaths.HelpFirstRunMarker))
         {
             try
             {
@@ -33,6 +48,8 @@ internal sealed class SupportUiController : IDisposable
 
             Dispatcher.UIThread.Post(OpenHelp);
         }
+
+        _updates.StartAutoCheck();
     }
 
     private void AttachTrayItems()
@@ -50,6 +67,8 @@ internal sealed class SupportUiController : IDisposable
         {
             IsEnabled = false
         };
+        _updateItem = new NativeMenuItem("Проверить обновления");
+        _updateItem.Click += (_, _) => OnUpdateItem();
         var help = new NativeMenuItem("Справка…");
         var data = new NativeMenuItem("Открыть папку данных");
         var about = new NativeMenuItem("О программе…");
@@ -62,9 +81,32 @@ internal sealed class SupportUiController : IDisposable
         int insertAt = Math.Max(0, menu.Items.Count - 2);
         menu.Items.Insert(insertAt++, new NativeMenuItemSeparator());
         menu.Items.Insert(insertAt++, version);
+        menu.Items.Insert(insertAt++, _updateItem);
         menu.Items.Insert(insertAt++, help);
         menu.Items.Insert(insertAt++, data);
         menu.Items.Insert(insertAt, about);
+    }
+
+    private void OnUpdateItem()
+    {
+        if (_updates.Stage == UpdateStage.Installed && _updates.Restart()) return;
+        OpenAbout();
+        if (_updates.Stage is UpdateStage.Idle or UpdateStage.UpToDate or UpdateStage.Failed)
+            _ = _updates.CheckAsync();
+    }
+
+    private void RefreshUpdateItem()
+    {
+        if (_updateItem == null) return;
+        _updateItem.Header = _updates.Stage switch
+        {
+            UpdateStage.Checking    => "Проверка обновлений…",
+            UpdateStage.Available   => $"Обновить до v{_updates.Release!.Version}…",
+            UpdateStage.Downloading => $"Загрузка обновления… {_updates.Progress:P0}",
+            UpdateStage.Installed   => "Перезапустить для обновления",
+            _                       => "Проверить обновления"
+        };
+        _updateItem.IsEnabled = !_updates.Busy;
     }
 
     private void OpenHelp()
@@ -91,7 +133,7 @@ internal sealed class SupportUiController : IDisposable
             return;
         }
 
-        _aboutWindow = new AboutWindow(OpenHelp);
+        _aboutWindow = new AboutWindow(_updates, OpenHelp);
         _aboutWindow.Closed += (_, _) => _aboutWindow = null;
         _aboutWindow.Show();
         _aboutWindow.Activate();
@@ -113,6 +155,7 @@ internal sealed class SupportUiController : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _updates.Cancel();
         _helpWindow?.Close();
         _aboutWindow?.Close();
     }

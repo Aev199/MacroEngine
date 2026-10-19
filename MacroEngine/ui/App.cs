@@ -26,7 +26,7 @@ internal sealed class App : Application
         {
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
             _controller = new AppController(desktop);
-            _supportUi = new SupportUiController();
+            _supportUi = new SupportUiController(_controller.TryRestartForUpdate);
         }
 
         base.OnFrameworkInitializationCompleted();

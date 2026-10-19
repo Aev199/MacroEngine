@@ -25,6 +25,13 @@ internal static class AppIcon
         return _cached;
     }
 
+    /// <summary>The same icon as a bitmap, for showing inside windows (About).</summary>
+    public static Bitmap Image()
+    {
+        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.png");
+        return File.Exists(path) ? new Bitmap(path) : RenderFallback();
+    }
+
     private static Bitmap RenderFallback()
     {
         var rtb = new RenderTargetBitmap(new PixelSize(32, 32), new Vector(96, 96));
