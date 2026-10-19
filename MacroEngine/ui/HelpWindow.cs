@@ -1,174 +1,138 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
 using MacroEngine.Core;
+using static MacroEngine.Core.MarkdownLite;
 
 namespace MacroEngine.UI;
 
-/// <summary>Offline help backed by the README embedded in the executable.</summary>
+/// <summary>
+/// Offline help: README.md embedded in the executable, one "##" chapter at a time,
+/// with a chapter list and full-text search. README stays the single source, so the
+/// help and the GitHub page never drift apart.
+/// </summary>
 internal sealed class HelpWindow : Window
 {
-    private static readonly FontFamily MonoFont =
-        new("Cascadia Mono,Consolas,monospace");
+    private const string IntroTitle = "О MacroEngine";
+
+    private readonly List<Section> _sections;
+    private readonly ListBox _nav = new();
+    private readonly TextBox _search = new() { Watermark = "Поиск по справке" };
+    private readonly ScrollViewer _content = new();
+    private readonly TextBlock _empty = new()
+    {
+        Text = "Ничего не найдено",
+        Foreground = UiTheme.B(UiTheme.TextGrey),
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center,
+        IsVisible = false
+    };
 
     public HelpWindow(Action openAbout)
     {
-        Title = $"MacroEngine {ProductInfo.DisplayVersion} — Справка";
-        Width = 780;
-        Height = 590;
-        MinWidth = 600;
-        MinHeight = 440;
+        Title = "MacroEngine — Справка";
+        Width = 940;
+        Height = 660;
+        MinWidth = 720;
+        MinHeight = 460;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Icon = AppIcon.Get();
 
-        var tabs = new TabControl
+        _sections = Sections(Parse(ProductInfo.ReadEmbeddedReadme()), out _)
+            .Select(s => s.Title.Length == 0 ? s with { Title = IntroTitle } : s)
+            .ToList();
+
+        _nav.Classes.Add("rows");
+        _nav.ItemTemplate = new FuncDataTemplate<Section>((_, _) =>
         {
-            Items =
+            var title = new TextBlock { FontSize = UiTheme.FsBody, TextTrimming = TextTrimming.CharacterEllipsis };
+            title.Bind(TextBlock.TextProperty, new Avalonia.Data.Binding(nameof(Section.Title)));
+            var bar = new Border { Width = 3, HorizontalAlignment = HorizontalAlignment.Left };
+            bar.Classes.Add("selbar");
+            return new Grid
             {
-                new TabItem { Header = "Кратко", Content = BuildQuickReference() },
-                new TabItem { Header = "README", Content = BuildReadme() }
-            }
-        };
+                Children = { new Border { Padding = new Thickness(14, 8, 10, 8), Child = title }, bar }
+            };
+        });
+        _nav.SelectionChanged += (_, _) => Show(_nav.SelectedItem as Section);
+        _search.TextChanged += (_, _) => Filter();
 
-        var data = new Button { Content = "Папка данных" };
-        var about = new Button { Content = "О программе" };
-        var close = new Button { Content = "Закрыть", IsCancel = true };
-        var status = new TextBlock
-        {
-            Opacity = 0.54,
-            FontSize = 11,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextWrapping = TextWrapping.Wrap
-        };
-
+        var about = UiTheme.Btn("О программе", "link", small: true);
         about.Click += (_, _) => openAbout();
-        close.Click += (_, _) => Close();
-        data.Click += (_, _) => Run(
-            status,
-            () => ShellTools.OpenDirectory(AppPaths.RootDirectory),
-            "Папка данных открыта.");
-
-        var footer = new Grid
+        var version = UiTheme.Caption(ProductInfo.DisplayVersion, UiTheme.TextGrey);
+        version.Margin = new Thickness(6, 0, 0, 0);
+        var footerRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        footerRow.Children.Add(version);
+        Grid.SetColumn(about, 1);
+        footerRow.Children.Add(about);
+        var footer = new Border
         {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(10, 7, 10, 10)
+            BorderBrush = UiTheme.B(UiTheme.Divider),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(8, 6),
+            Child = footerRow
         };
-        footer.Children.Add(status);
 
-        var buttons = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Children = { data, about, close }
-        };
-        Grid.SetColumn(buttons, 1);
-        footer.Children.Add(buttons);
+        var left = new DockPanel();
+        var searchBox = new Border { Padding = new Thickness(8), BorderBrush = UiTheme.B(UiTheme.Divider), BorderThickness = new Thickness(0, 0, 0, 1), Child = _search };
+        DockPanel.SetDock(searchBox, Dock.Top);
+        DockPanel.SetDock(footer, Dock.Bottom);
+        left.Children.Add(searchBox);
+        left.Children.Add(footer);
+        left.Children.Add(_nav);
 
-        Content = new Grid
+        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("250,8,*"), Margin = new Thickness(10) };
+        body.Children.Add(UiTheme.Panel(left));
+        var right = UiTheme.Panel(new Grid { Children = { _content, _empty } });
+        Grid.SetColumn(right, 2);
+        body.Children.Add(right);
+        Content = body;
+
+        Filter();
+        KeyDown += (_, e) =>
         {
-            RowDefinitions = new RowDefinitions("*,Auto"),
-            Children = { tabs, footer }
+            if (e.Key == Avalonia.Input.Key.Escape) Close();
+            else if (e.Key == Avalonia.Input.Key.F && e.KeyModifiers == Avalonia.Input.KeyModifiers.Control) { _search.Focus(); _search.SelectAll(); }
         };
-        Grid.SetRow(footer, 1);
     }
 
-    private static Control BuildReadme() => new TextBox
+    /// <summary>Open on a chapter by title (e.g. "Обновления"); unknown titles keep the first one.</summary>
+    public void ShowSection(string title)
     {
-        Text = ProductInfo.ReadEmbeddedReadme(),
-        IsReadOnly = true,
-        AcceptsReturn = true,
-        TextWrapping = TextWrapping.Wrap,
-        Margin = new Thickness(8),
-        Padding = new Thickness(8)
-    };
-
-    private static Control BuildQuickReference()
-    {
-        var panel = new StackPanel
-        {
-            Margin = new Thickness(18, 14),
-            Spacing = 10
-        };
-
-        panel.Children.Add(Section("Триггеры"));
-        panel.Children.Add(Code(
-            "!mail        name@example.com\n" +
-            "!date        {date}\n" +
-            "Ctrl+Alt+M   macro: AcadSave"));
-        panel.Children.Add(Note(
-            "Текст — последовательность символов. Шорткат — прямое сочетание. Лидер — 2–3 модификатора и короткий остаток."));
-
-        panel.Children.Add(Divider());
-        panel.Children.Add(Section("Контекст"));
-        panel.Children.Add(Code("*            везде\nacad         AutoCAD\n!browser     исключить браузеры"));
-        panel.Children.Add(Note("Несколько значений разделяются запятыми."));
-
-        panel.Children.Add(Divider());
-        panel.Children.Add(Section("Токены"));
-        panel.Children.Add(Code(
-            "{date}  {time}  {datetime:yyyy-MM-dd}\n" +
-            "{clipboard}  {input:Подпись}  {choice:Да|Нет}  {cursor}"));
-
-        panel.Children.Add(Divider());
-        panel.Children.Add(Section("Макросы"));
-        panel.Children.Add(Code(
-            "type текст\n" +
-            "key Ctrl+S\n" +
-            "sleep 500\n" +
-            "click 120,300\n" +
-            "run \"C:\\Program Files\\Tool\\tool.exe\" --arg"));
-
-        panel.Children.Add(Divider());
-        panel.Children.Add(Section("Безопасность"));
-        panel.Children.Add(Note(
-            "Одновременно выполняется одно действие. При смене исходного окна ввод прекращается. Обычный журнал не сохраняет текст подстановок, команды или буфер обмена."));
-
-        return new ScrollViewer { Content = panel };
+        _search.Text = "";
+        var section = _sections.FirstOrDefault(s => s.Title.Equals(title, StringComparison.OrdinalIgnoreCase));
+        if (section != null) _nav.SelectedItem = section;
     }
 
-    private static TextBlock Section(string text) => new()
+    private void Filter()
     {
-        Text = text,
-        FontSize = 13,
-        FontWeight = FontWeight.Medium
-    };
+        string q = (_search.Text ?? "").Trim();
+        var visible = q.Length == 0
+            ? _sections
+            : _sections.Where(s => s.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                   || s.PlainText.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+        var selected = _nav.SelectedItem as Section;
+        _nav.ItemsSource = visible;
+        _nav.SelectedItem = selected != null && visible.Contains(selected) ? selected : visible.FirstOrDefault();
+        _empty.IsVisible = visible.Count == 0;
+        _content.IsVisible = visible.Count > 0;
+    }
 
-    private static TextBlock Note(string text) => new()
+    private void Show(Section? section)
     {
-        Text = text,
-        TextWrapping = TextWrapping.Wrap,
-        Opacity = 0.68,
-        LineHeight = 19
-    };
-
-    private static TextBlock Code(string text) => new()
-    {
-        Text = text,
-        FontFamily = MonoFont,
-        FontSize = 12,
-        TextWrapping = TextWrapping.Wrap,
-        Margin = new Thickness(8, 0, 0, 0)
-    };
-
-    private static Border Divider() => new()
-    {
-        Height = 1,
-        Background = UiTheme.B(UiTheme.Divider),
-        Margin = new Thickness(0, 2)
-    };
-
-    private static void Run(TextBlock status, Action action, string success)
-    {
-        try
+        if (section == null) return;
+        var page = new StackPanel { Margin = new Thickness(28, 20, 28, 28), MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Left };
+        page.Children.Add(new TextBlock
         {
-            action();
-            status.Text = success;
-        }
-        catch (Exception ex)
-        {
-            status.Text = $"Ошибка: {ex.Message}";
-        }
+            Text = section.Title,
+            FontSize = UiTheme.FsTitle + 4,
+            FontWeight = FontWeight.Bold,
+            Margin = new Thickness(0, 0, 0, 14)
+        });
+        page.Children.Add(MarkdownView.Render(section.Blocks));
+        _content.Content = page;
+        _content.Offset = default;
     }
 }

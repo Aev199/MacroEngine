@@ -26,6 +26,8 @@ internal static class AppPaths
     public static string FirstRunMarker { get; } = Path.Combine(StateDirectory, ".firstrun");
     public static string HelpFirstRunMarker { get; } = Path.Combine(StateDirectory, ".help-shown-v1");
     public static string DiagnosticMarker { get; } = Path.Combine(StateDirectory, "diagnostic.logging");
+    public static string UpdateStateFile { get; } = Path.Combine(StateDirectory, "update.json");
+    public static string UpdatesDirectory { get; } = Path.Combine(RootDirectory, "updates");
 
     public static bool IsPortable => Portable;
 

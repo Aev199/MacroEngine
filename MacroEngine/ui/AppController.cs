@@ -571,6 +571,33 @@ internal sealed class AppController : IDisposable
         _settingsWindow.Show();
     }
 
+    /// <summary>
+    /// Restart into a version just installed on disk. Refused while the editor is open,
+    /// so unsaved edits are never dropped; the caller tells the user to close it first.
+    /// </summary>
+    public bool TryRestartForUpdate()
+    {
+        if (_settingsWindow != null)
+        {
+            _settingsWindow.Activate();
+            return false;
+        }
+
+        string? exe = Environment.ProcessPath;
+        // Only a published MacroEngine.exe restarts itself (not "dotnet run" during development).
+        if (string.IsNullOrEmpty(exe) || !File.Exists(exe)
+            || !Path.GetFileName(exe).Equals("MacroEngine.exe", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // The new process waits for the single-instance mutex this one releases on exit.
+        Process.Start(new ProcessStartInfo(exe, UpdateRestartArgument) { UseShellExecute = false })?.Dispose();
+        AppLog.Write("Restarting into the updated version");
+        Quit();
+        return true;
+    }
+
+    public const string UpdateRestartArgument = "--after-update";
+
     private void Quit()
     {
         AppLog.Write("=== MacroEngine shutting down ===");

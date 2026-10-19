@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - master
+    tags:
+      - 'v*'
   pull_request:
   workflow_dispatch:
 
@@ -17,6 +19,8 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.product.outputs.version }}
 
     steps:
       - name: Checkout
@@ -81,3 +85,48 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 9
+
+  # A "v<version>" tag publishes a GitHub Release with the package and its checksum.
+  # The in-app updater looks for exactly these two assets.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.windows.outputs.version }}
+
+    steps:
+      - name: Check tag matches project version
+        run: |
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag $TAG does not match <Version>$VERSION</Version> in MacroEngine.csproj"
+            exit 1
+          fi
+
+      - name: Download Windows package
+        uses: actions/download-artifact@v4
+        with:
+          name: MacroEngine-${{ needs.windows.outputs.version }}-win-x64
+          path: package
+
+      - name: Zip and checksum
+        run: |
+          PKG="MacroEngine-${VERSION}-win-x64.zip"
+          test -f package/MacroEngine.exe
+          (cd package && zip -r -9 "../$PKG" .)
+          sha256sum "$PKG" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          case "$VERSION" in *-*) flags="--prerelease" ;; esac
+          gh release create "$TAG" "MacroEngine-${VERSION}-win-x64.zip" SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "MacroEngine $VERSION" \
+            --generate-notes $flags

@@ -15,8 +15,16 @@ static class Program
     static void Main(string[] args)
     {
         // Single instance — a second copy would install a second keyboard hook.
-        _instanceMutex = new Mutex(initiallyOwned: true, "MacroEngine_SingleInstance_2F1A", out bool createdNew);
-        if (!createdNew)
+        _instanceMutex = new Mutex(initiallyOwned: true, "MacroEngine_SingleInstance_2F1A", out bool owned);
+
+        // After a self-update the previous process is still shutting down: wait for it.
+        if (!owned && args.Contains(UI.AppController.UpdateRestartArgument))
+        {
+            try { owned = _instanceMutex.WaitOne(TimeSpan.FromSeconds(20)); }
+            catch (AbandonedMutexException) { owned = true; }
+        }
+
+        if (!owned)
         {
             System.Windows.Forms.MessageBox.Show("MacroEngine уже запущен.", "MacroEngine",
                 System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
