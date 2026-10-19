@@ -13,8 +13,9 @@ namespace MacroEngine.UI;
 /// </summary>
 internal sealed class OverlayWindow : Window
 {
-    private static readonly Color NeutralText = Color.FromRgb(218, 218, 218);
-    private static readonly Color MatchedText = Color.FromRgb(139, 211, 194);
+    // Same look as the editor's snackbar: dark blue-grey strip, light text.
+    private static readonly Color NeutralText = UiTheme.AccentChipBg;
+    private static readonly Color MatchedText = UiTheme.SuccessBg;
 
     private readonly TextBlock _text;
     private readonly DispatcherTimer _hideTimer;
@@ -47,10 +48,9 @@ internal sealed class OverlayWindow : Window
 
         Content = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(238, 24, 24, 27)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(38, 255, 255, 255)),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(5),
+            Background = UiTheme.B(Color.FromArgb(240, UiTheme.Text.R, UiTheme.Text.G, UiTheme.Text.B)),
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
             Padding = new Thickness(12, 6),
             MinWidth = 140,
             Child = _text
