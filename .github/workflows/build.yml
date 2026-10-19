@@ -8,6 +8,11 @@ on:
       - 'v*'
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish v<Version> from this commit (creates the tag)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -86,25 +91,40 @@ jobs:
           retention-days: 7
           compression-level: 9
 
-  # A "v<version>" tag publishes a GitHub Release with the package and its checksum.
-  # The in-app updater looks for exactly these two assets.
+  # Publishes a GitHub Release with the package and its checksum — the in-app
+  # updater looks for exactly these two assets. Either push a "v<Version>" tag,
+  # or run this workflow on master with "publish_release" (the release then
+  # creates the tag on that commit).
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release && github.ref == 'refs/heads/master')
     needs: windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      TAG: ${{ github.ref_name }}
       VERSION: ${{ needs.windows.outputs.version }}
 
     steps:
-      - name: Check tag matches project version
+      - name: Resolve tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$TAG" != "v$VERSION" ]; then
-            echo "::error::Tag $TAG does not match <Version>$VERSION</Version> in MacroEngine.csproj"
-            exit 1
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+            if [ "$TAG" != "v$VERSION" ]; then
+              echo "::error::Tag $TAG does not match <Version>$VERSION</Version> in MacroEngine.csproj"
+              exit 1
+            fi
+          else
+            TAG="v$VERSION"
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+              echo "::error::$TAG already exists — bump <Version> in MacroEngine.csproj first"
+              exit 1
+            fi
           fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
 
       - name: Download Windows package
         uses: actions/download-artifact@v4
@@ -128,5 +148,6 @@ jobs:
           case "$VERSION" in *-*) flags="--prerelease" ;; esac
           gh release create "$TAG" "MacroEngine-${VERSION}-win-x64.zip" SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "MacroEngine $VERSION" \
             --generate-notes $flags
