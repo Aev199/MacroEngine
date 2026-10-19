@@ -70,6 +70,10 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(IntPtr hWnd);
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -180,6 +184,9 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GlobalUnlock(IntPtr hMem);
 
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GlobalFree(IntPtr hMem);
+
     /// <summary>Register a custom clipboard format, or get existing ID.</summary>
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern uint RegisterClipboardFormat(string lpszFormat);
@@ -197,6 +204,20 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    // ── Window Styles (click-through overlay) ──────────────────────
+
+    public const int GWL_EXSTYLE = -20;
+    public const int WS_EX_TRANSPARENT = 0x00000020;
+    public const int WS_EX_TOOLWINDOW = 0x00000080;
+    public const int WS_EX_NOACTIVATE = 0x08000000;
+    public const int WS_EX_LAYERED = 0x00080000;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
     // ── KBDLLHOOKSTRUCT ────────────────────────────────────────────
 
